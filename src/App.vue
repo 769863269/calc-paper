@@ -470,10 +470,31 @@ function toast(msg) {
 }
 
 // ---------- 计算与格式化 ----------
+// 去掉数字字符串尾部的无效 0（含科学计数法小数部分）
+function trimZeros(s) {
+  if (s.includes('e')) {
+    const [m, exp] = s.split('e')
+    return m.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') + 'e' + exp
+  }
+  return s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+}
+
 function formatResult(res) {
   if (res === undefined || res === null) return ''
   try {
-    if (math.isBigNumber(res) && res.isInteger()) return res.toFixed(0)
+    if (math.isBigNumber(res)) {
+      // 整数：完整输出（不转科学计数法，不丢位）
+      if (res.isInteger()) return res.toFixed(0)
+      // 完整十进制（decimal.js 64 位有效数字，有限小数可精确表示）
+      const full = res.toString()
+      // 有限且长度适中 → 完整显示，零偏差
+      if (!full.includes('e') && full.length <= 32) return trimZeros(full)
+      // 无限小数 / 超长：fixed 16 位小数（数学上必然截断，商业精度远超需求）
+      const f = trimZeros(math.format(res, { notation: 'fixed', precision: 16 }))
+      // fixed 变成 0（极小值）时保留指数形式，避免误显示为 0
+      if (f === '0' || f === '-0') return full
+      return f
+    }
     return math.format(res, { precision: 14 })
   } catch (e) { return String(res) }
 }
@@ -848,7 +869,7 @@ async function fetchRateToInput() {
     const data = await res.json()
     const cny = data.rates?.CNY
     if (!cny) throw new Error('no cny')
-    const val = Number(cny).toFixed(4)
+    const val = Number(cny).toFixed(6)
     // 填入底部公式框：空则直接填；末尾是运算符则追加；否则补 * 再追加
     if (quickExpr.value.trim()) {
       const t = quickExpr.value.trimEnd()
