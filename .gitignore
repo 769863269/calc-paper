@@ -7,3 +7,6 @@ src-tauri/gen
 # 日志
 install.log
 npm-debug.log*
+
+# Vite 临时文件
+vite.config.js.timestamp-*.*
