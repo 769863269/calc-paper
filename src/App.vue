@@ -14,7 +14,7 @@
         </div>
 
         <div class="header-actions">
-          <button class="icon-btn" @click="toggleTheme" :title="theme === 'light' ? '切换暗色' : '切换亮色'">
+          <button class="icon-btn" @click="toggleTheme" v-tip="() => theme === 'light' ? '切换暗色' : '切换亮色'">
             <svg v-if="theme === 'light'" class="i-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="4" />
               <path d="M12 2v2M12 20v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M2 12h2M20 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
@@ -48,8 +48,8 @@
               @click.stop
             />
             <span v-else class="sheet-name" :title="sheet.name">{{ sheet.name }}</span>
-            <span v-if="editingIndex !== sIdx" class="sheet-edit" title="重命名（双击标签也可）" @click.stop="startRename(sIdx)">✎</span>
-            <span v-if="sheets.length > 1 && editingIndex !== sIdx" class="sheet-del" @click.stop="delSheet(sIdx)">×</span>
+            <span v-if="editingIndex !== sIdx" class="sheet-edit" v-tip="'重命名（双击标签也可）'" @click.stop="startRename(sIdx)">✎</span>
+            <span v-if="sheets.length > 1 && editingIndex !== sIdx" class="sheet-del" v-tip="'删除此稿纸'" @click.stop="delSheet(sIdx)">×</span>
           </div>
         </div>
       </div>
@@ -63,7 +63,7 @@
           <div class="guide-examples">
             <div class="guide-example">· 算式：<code>55+888+999</code> → <code>= 1,942</code></div>
             <div class="guide-example">· 变量：<code>tax=0.13</code>，下一行用 <code>1000*tax</code></div>
-            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Tab</code> 算式⇄备注 · <code>↑</code> 调历史</div>
+            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Tab</code> 算式⇄备注 · <code>↑</code> 调历史 / 再按选行</div>
           </div>
           <div class="guide-actions">
             <button class="modal-btn primary" @click="loadExample">载入示例</button>
@@ -71,30 +71,33 @@
           </div>
         </div>
 
-        <div class="calc-list">
+        <transition-group name="row" tag="div" class="calc-list">
           <div
             v-for="(line, lIdx) in currentSheet.lines"
             :key="line.id"
             class="calc-row"
-            :class="{ focused: focusedLine === lIdx, dragging: dragIndex === lIdx }"
+            :class="{ focused: focusedLine === lIdx, latest: latestLineIdx === lIdx, dragging: dragIndex === lIdx, pulse: line.pulse, shake: line.shake, 'drop-above': dropTarget.idx === lIdx && dropTarget.pos === 'above', 'drop-below': dropTarget.idx === lIdx && dropTarget.pos === 'below' }"
+            :data-id="line.id"
+            :ref="(el) => setRowRef(el, line.id)"
             draggable="true"
+            @click="onRowClick(lIdx, $event)"
             @dragstart="onDragStart($event, lIdx)"
-            @dragover.prevent="dragIndex = lIdx"
-            @drop="onDrop($event, lIdx)"
+            @dragover.prevent="onDragOver($event, lIdx)"
+            @drop="onDrop($event)"
             @dragend="onDragEnd"
           >
             <div class="row-main">
-              <span class="drag-handle" title="拖动排序">⋮⋮</span>
-              <div class="expr-wrap">
+              <span class="drag-handle" v-tip="'拖动排序'">⋮⋮</span>
+              <div class="expr-wrap" @mouseenter="onExprHover(lIdx, $event)" @mouseleave="hideVarTip">
                 <input
                   :ref="(el) => setExprRef(el, lIdx)"
                   v-model="line.expr"
                   @input="onExprInput(lIdx)"
                   @keydown.enter.prevent="onExprEnter(lIdx)"
                   @keydown.tab.prevent="onExprTab(lIdx)"
-                  @keydown.up.prevent="focusPrevRow(lIdx)"
-                  @keydown.down.prevent="focusNextRow(lIdx)"
-                  @focus="focusedLine = lIdx"
+                  @keydown.up.prevent="onExprUp(lIdx)"
+                  @keydown.down.prevent="onExprDown(lIdx)"
+                  @focus="onRowFocus(lIdx)"
                   @blur="onExprBlur(lIdx)"
                   class="expr-input"
                   placeholder="计算公式（回车跳下一行）"
@@ -104,18 +107,21 @@
                 <div v-if="completion && completion.lIdx === lIdx && completion.matches.length" class="completion-list">
                   <div
                     v-for="(c, ci) in completion.matches"
-                    :key="c"
+                    :key="c.name"
                     class="completion-item"
                     :class="{ active: completion.active === ci }"
                     @mousedown.prevent="applyCompletion(ci)"
-                  >{{ c }}</div>
+                  >
+                    <span class="completion-name">{{ c.name }}</span>
+                    <span class="completion-desc">{{ c.desc }}</span>
+                  </div>
                 </div>
               </div>
               <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }">
                 <span class="eq-mark">=</span>
-                <span class="result-value" :title="line.errorMsg || line.result">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
+                <span class="result-value">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
                 <span v-if="line.partial" class="partial-hint" :title="line.errorMsg">表达式不完整</span>
-                <span v-else-if="line.result === '错误'" class="partial-hint" :title="line.errorMsg">公式错误</span>
+                <span v-else-if="line.result === '错误'" class="partial-hint err-badge" @click="openErrPopover(lIdx, $event)" v-tip="'点击查看原因与建议'">公式错误 ⓘ</span>
               </div>
             </div>
 
@@ -126,20 +132,21 @@
                 class="note-input"
                 placeholder="备注（Tab 可回切算式）"
                 @keydown.tab.prevent="focusExpr(lIdx)"
-                @focus="focusedLine = lIdx"
+                @focus="onRowFocus(lIdx)"
                 @blur="onNoteBlur(lIdx)"
               />
             </div>
 
             <div class="row-meta">
               <span class="line-time" v-if="line.time">{{ line.time }}</span>
+              <span v-if="copyFeedbackIdx === lIdx" class="copy-feedback">✓ 已复制</span>
               <div class="row-actions">
-                <button class="row-icon" @click="openCopyMenu(lIdx, $event)" title="复制（结果/算式/整行）">⧉</button>
-                <button class="row-icon" @click="delLine(lIdx)" title="删除此行（Ctrl+Z 可撤销）">×</button>
+                <button class="row-icon" @click="openCopyMenu(lIdx, $event)" v-tip="'复制（结果/算式/整行）'">⧉</button>
+                <button class="row-icon" @click="delLine(lIdx)" v-tip="'删除此行（可撤销）'">×</button>
               </div>
             </div>
           </div>
-        </div>
+        </transition-group>
       </div>
 
       <!-- 底部新增输入区 -->
@@ -149,13 +156,13 @@
             ref="bottomInput"
             v-model="quickExpr"
             @keydown.enter.prevent="addFromBottom"
-            @keydown.up.prevent="historyUp"
+            @keydown.up.prevent="bottomUp"
             class="quick-input"
             rows="1"
-            placeholder="计算公式（支持粘贴多行，↑ 调历史）"
+            placeholder="计算公式（支持粘贴多行，↑ 调历史，再↑ 选行）"
             spellcheck="false"
           ></textarea>
-          <button class="quick-btn" @click="addFromBottom" title="新增一行">=</button>
+          <button class="quick-btn" @click="addFromBottom" v-tip="'新增一行'">=</button>
         </div>
       </div>
 
@@ -163,13 +170,13 @@
       <footer class="card-footer">
         <div class="footer-tools">
           <div class="tool-group">
-            <button class="tool-btn" @click="clearSheet" title="清空当前稿纸">
+            <button class="tool-btn" @click="clearSheet" v-tip="'清空当前稿纸'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
               </svg>
             </button>
-            <button class="tool-btn" @click="clearAllSheets" title="清空所有稿纸">
+            <button class="tool-btn" @click="clearAllSheets" v-tip="'清空所有稿纸'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M3 6h18" />
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -178,22 +185,25 @@
                 <line x1="14" y1="11" x2="14" y2="17" />
               </svg>
             </button>
-            <button class="tool-btn rate-btn" @click="fetchRateToInput" :disabled="rateLoading" title="获取 USD→CNY 实时汇率并填入公式">{{ rateLoading ? '…' : '汇' }}</button>
+            <button class="tool-btn rate-btn" @click="fetchRateToInput" :disabled="rateLoading" v-tip="'获取 USD→CNY 参考汇率，点开可看详情并填入公式'">
+              <span v-if="rateLoading" class="spinner"></span>
+              <span v-else>汇</span>
+            </button>
           </div>
           <div class="tool-group">
-            <button class="tool-btn" @click="startRename(activeSheetIndex)" title="重命名稿纸">
+            <button class="tool-btn" @click="startRename(activeSheetIndex)" v-tip="'重命名稿纸'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                 <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
-            <button class="tool-btn" @click="undo" title="撤销（Ctrl+Z）">
+            <button class="tool-btn" @click="undo" v-tip="'撤销（Ctrl+Z）'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="1 4 1 10 7 10" />
                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
               </svg>
             </button>
-            <button class="tool-btn" @click="helpOpen = true" title="帮助">
+            <button class="tool-btn" @click="helpOpen = true" v-tip="'帮助'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
@@ -209,6 +219,69 @@
         </button>
       </footer>
     </div>
+
+    <!-- 汇率说明卡片 -->
+    <transition name="fade">
+      <div v-if="rateCard" class="rate-mask" @click.self="closeRateCard">
+        <div class="rate-card">
+          <div class="rate-progress"></div>
+          <div class="rate-header">
+            <div class="rate-title">
+              <span class="rate-flag">$</span>
+              <span>参考汇率</span>
+            </div>
+            <button class="rate-close" @click="closeRateCard" aria-label="关闭">×</button>
+          </div>
+
+          <div class="rate-hero">
+            <div class="rate-pair">USD → CNY</div>
+            <div class="rate-value">
+              <span class="rate-unit">1 美元 =</span>
+              <span class="rate-number">{{ rateCard.rate }}</span>
+              <span class="rate-unit">元</span>
+            </div>
+          </div>
+
+          <div class="rate-meta">
+            <div class="rate-meta-row">
+              <svg class="rate-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" stroke-linecap="round"/></svg>
+              <div class="rate-meta-item">
+                <span class="rate-meta-label">更新时间</span>
+                <span class="rate-meta-value">{{ fmtRateTime(rateCard.time) }}</span>
+              </div>
+            </div>
+            <div class="rate-meta-row">
+              <svg class="rate-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2" stroke-linecap="round"/></svg>
+              <div class="rate-meta-item">
+                <span class="rate-meta-label">下次更新</span>
+                <span class="rate-meta-value">{{ fmtRateTime(rateCard.nextUpdate) }}</span>
+              </div>
+            </div>
+            <div class="rate-meta-row">
+              <svg class="rate-meta-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              <div class="rate-meta-item">
+                <span class="rate-meta-label">数据来源</span>
+                <span class="rate-meta-value">{{ rateCard.source }}</span>
+              </div>
+            </div>
+          </div>
+
+          <p class="rate-note">
+            取各大央行参考汇率，每日更新一次，非实时盘面报价，仅供换算参考。实际结汇请以银行实时牌价为准。
+          </p>
+
+          <div v-if="rateCard.filled" class="rate-filled-hint">
+            <svg class="rate-hint-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            已自动填入底部公式框
+          </div>
+
+          <div class="rate-footer">
+            <span class="rate-count">{{ rateCountdown }} 秒后自动关闭</span>
+            <button class="rate-btn-single" @click="closeRateCard">关闭</button>
+          </div>
+        </div>
+      </div>
+    </transition>
 
     <!-- 行复制菜单（带内容预览） -->
     <div v-if="copyMenu" class="popover copy-menu" :style="menuPos">
@@ -228,6 +301,32 @@
 
     <!-- 菜单遮罩 -->
     <div v-if="copyMenu" class="popover-mask" @click="closeMenus"></div>
+
+    <!-- 错误详情浮层（点击"公式错误"徽标展开） -->
+    <div v-if="errPopover.show" class="popover err-popover" :style="errPopover.pos">
+      <div class="err-title">公式错误</div>
+      <div class="err-reason">{{ errPopover.reason }}</div>
+      <div class="err-suggest" v-if="errPopover.suggest">
+        <span class="err-suggest-label">建议</span>{{ errPopover.suggest }}
+      </div>
+    </div>
+    <div v-if="errPopover.show" class="popover-mask" @click="closeErrPopover"></div>
+
+    <!-- 自定义 tooltip（带箭头，延迟 300ms） -->
+    <transition name="fade">
+      <div v-if="tipState.show" class="tooltip" :style="{ left: tipState.x + 'px', top: tipState.y + 'px' }">{{ tipState.text }}</div>
+    </transition>
+
+    <!-- 变量值悬浮提示 -->
+    <transition name="fade">
+      <div v-if="varTip.show" class="var-tip" :style="varTip.pos">
+        <div v-for="v in varTip.vars" :key="v.name" class="var-tip-row">
+          <span class="var-tip-name">{{ v.name }}</span>
+          <span class="var-tip-eq">=</span>
+          <span class="var-tip-val">{{ v.value }}</span>
+        </div>
+      </div>
+    </transition>
 
     <!-- 自定义确认弹层 -->
     <transition name="fade">
@@ -262,12 +361,14 @@
             <div class="help-section">
               <div class="help-head">② 支持的运算</div>
               <table class="help-table">
+                <tbody>
                 <tr><td><code>+ - * /</code></td><td>加减乘除</td><td>100-20*3 = 40</td></tr>
                 <tr><td><code>^</code></td><td>幂运算</td><td>2^10 = 1024</td></tr>
                 <tr><td><code>( )</code></td><td>括号，控制优先级</td><td>(100-20)*0.15 = 12</td></tr>
                 <tr><td><code>%</code></td><td>取模（余数）</td><td>10%3 = 1</td></tr>
                 <tr><td><code>pi</code> <code>e</code></td><td>数学常量</td><td>pi = 3.1415926…</td></tr>
                 <tr><td><code>=</code></td><td>定义变量</td><td>tax = 0.13</td></tr>
+                              </tbody>
               </table>
             </div>
 
@@ -275,6 +376,7 @@
             <div class="help-section">
               <div class="help-head">③ 常用函数</div>
               <table class="help-table">
+                <tbody>
                 <tr><td><code>sqrt(x)</code></td><td>平方根</td><td>sqrt(9) = 3</td></tr>
                 <tr><td><code>abs(x)</code></td><td>绝对值</td><td>abs(-5) = 5</td></tr>
                 <tr><td><code>round(x)</code></td><td>四舍五入</td><td>round(3.7) = 4</td></tr>
@@ -285,6 +387,7 @@
                 <tr><td><code>exp(x)</code></td><td>e 的 x 次方</td><td>exp(1) = 2.718…</td></tr>
                 <tr><td><code>log(x)</code> / <code>log10(x)</code></td><td>自然对数 / 常用对数</td><td>log10(1000) = 3</td></tr>
                 <tr><td><code>n!</code></td><td>阶乘</td><td>5! = 120</td></tr>
+                              </tbody>
               </table>
               <p class="help-tip">输入函数名时会出现补全提示，如输入 <code>sq</code> 自动推荐 <code>sqrt(</code>。</p>
             </div>
@@ -303,13 +406,15 @@
             <div class="help-section">
               <div class="help-head">⑤ 快捷键与操作</div>
               <table class="help-table">
+                <tbody>
                 <tr><td><code>回车</code></td><td>跳下一行（最后一行跳到底部输入框）</td></tr>
                 <tr><td><code>Tab</code></td><td>算式 ⇄ 备注 切换</td></tr>
                 <tr><td><code>↑</code> / <code>↓</code></td><td>上 / 下移动一行</td></tr>
-                <tr><td><code>↑</code>（底部输入框）</td><td>调出最近一条算过的式子</td></tr>
+                <tr><td><code>↑</code>（底部输入框）</td><td>调出最近一条算过的式子；再按 ↑ 进入选择行模式</td></tr>
                 <tr><td><code>Ctrl+Z</code></td><td>撤销删除 / 清空（最多 50 步）</td></tr>
                 <tr><td>拖动 <code>⋮⋮</code></td><td>调整算式行的顺序</td></tr>
                 <tr><td>标签 ✎ / 双击标签</td><td>重命名稿纸（回车确认，Esc 取消）</td></tr>
+                              </tbody>
               </table>
             </div>
 
@@ -320,6 +425,21 @@
                 所有数据自动保存在本机浏览器，关闭页面不丢失。
               </div>
             </div>
+
+            <!-- 参考汇率 -->
+            <div class="help-section">
+              <div class="help-head">⑦ 参考汇率（汇 按钮）</div>
+              <div class="help-grid">
+                点工具栏「<b>汇</b>」按钮，获取 <strong>1 美元兑人民币</strong> 的每日参考汇率，<br />
+                并自动填入底部公式框（空框直接填；末尾是运算符则追加；否则补 <code>*</code> 再追加）。<br />
+                点开后浮层会讲清四件事：<br />
+                ① <b>汇率</b>：1 美元 = 多少人民币；<br />
+                ② <b>更新时间</b>：数据最后更新时间；<br />
+                ③ <b>下次更新</b>：预计下次更新时间；<br />
+                ④ <b>数据来源</b>：open.er-api.com（取各大央行参考汇率，每日更新，非实时盘面报价）。<br />
+                实际结汇请以银行实时牌价为准。
+              </div>
+            </div>
           </div>
           <div class="modal-actions">
             <button class="modal-btn primary" @click="helpOpen = false">知道了</button>
@@ -328,8 +448,20 @@
       </div>
     </transition>
 
-    <transition name="fade">
-      <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
+    <transition name="toast-slide">
+      <div v-if="toastState.show" class="toast" :class="toastState.type">
+        <span class="toast-icon" v-if="toastState.type === 'success'">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="toast-icon" v-else-if="toastState.type === 'error'">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+        </span>
+        <span class="toast-icon" v-else>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>
+        </span>
+        <span class="toast-msg">{{ toastState.msg }}</span>
+        <button v-if="toastState.action" class="toast-action" @click="runToastAction">{{ toastState.action.label }}</button>
+      </div>
     </transition>
   </div>
 </template>
@@ -397,13 +529,47 @@ const editingIndex = ref(-1)
 const editingName = ref('')
 const renameInputs = []
 function setRenameInput(el, idx) { if (el) renameInputs[idx] = el }
-const toastMsg = ref('')
 const focusedLine = ref(-1)
+const latestLineIdx = ref(-1) // 最新通过底部公式框计算出来的行
 const quickExpr = ref('')
 const bottomInput = ref(null)
 const paperBody = ref(null)
 let toastTimer = null
 let saveTimer = null
+
+// 自定义 tooltip（带箭头，延迟 300ms，替换原生 title）
+const tipState = ref({ show: false, text: '', x: 0, y: 0 })
+let tipTimer = null
+function hideTip() {
+  clearTimeout(tipTimer)
+  tipState.value = { ...tipState.value, show: false }
+}
+const vTip = {
+  mounted(el, binding) {
+    const getText = () => typeof binding.value === 'function' ? binding.value() : binding.value
+    const onEnter = () => {
+      tipTimer = setTimeout(() => {
+        const r = el.getBoundingClientRect()
+        let x = r.left + r.width / 2
+        const pad = 8
+        const half = 110 // max-width 220 / 2
+        x = Math.max(half + pad, Math.min(x, window.innerWidth - half - pad))
+        tipState.value = { show: true, text: getText(), x, y: r.bottom + 6 }
+      }, 300)
+    }
+    const onLeave = () => hideTip()
+    el._tipEnter = onEnter
+    el._tipLeave = onLeave
+    el.addEventListener('mouseenter', onEnter)
+    el.addEventListener('mouseleave', onLeave)
+  },
+  unmounted(el) {
+    if (el._tipEnter) el.removeEventListener('mouseenter', el._tipEnter)
+    if (el._tipLeave) el.removeEventListener('mouseleave', el._tipLeave)
+    delete el._tipEnter
+    delete el._tipLeave
+  }
+}
 
 // 引导
 const guideOpen = ref(true)
@@ -422,7 +588,7 @@ function loadExample() {
   ]
   rebuildSheetScope(currentSheet.value)
   dismissGuide()
-  toast('已载入示例')
+  toast('已载入示例', { type: 'success' })
 }
 
 // 帮助
@@ -450,6 +616,9 @@ function undo() {
 // ---------- 自定义确认 ----------
 const confirmState = ref({ show: false, message: '', resolve: null })
 function askConfirm(message) {
+  // 弹窗打开时把焦点移出输入框，避免背后输入框的 Enter/空格误触发业务，
+  // 同时让确认按钮默认不聚焦，符合"危险操作防误触"要求
+  if (document.activeElement && typeof document.activeElement.blur === 'function') document.activeElement.blur()
   return new Promise(resolve => { confirmState.value = { show: true, message, resolve } })
 }
 function confirmOk() {
@@ -463,10 +632,17 @@ function confirmCancel() {
   if (r) r(false)
 }
 
-function toast(msg) {
-  toastMsg.value = msg
+const toastState = ref({ show: false, msg: '', type: 'info', action: null })
+function toast(msg, opts = {}) {
+  const { type = 'info', duration = 1800, action = null } = opts
+  toastState.value = { show: true, msg, type, action }
   if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => { toastMsg.value = '' }, 1800)
+  toastTimer = setTimeout(() => { toastState.value = { ...toastState.value, show: false } }, duration)
+}
+function runToastAction() {
+  const a = toastState.value.action
+  toastState.value = { ...toastState.value, show: false }
+  if (a && typeof a.run === 'function') a.run()
 }
 
 // ---------- 计算与格式化 ----------
@@ -544,21 +720,59 @@ function analyzeError(err) {
   return msg.slice(0, 30) || '无法解析'
 }
 
+function suggestFix(msg) {
+  if (/未定义符号/.test(msg)) {
+    const m = msg.match(/：(\S+)/)
+    const sym = m ? m[1].replace(/（.*/, '') : ''
+    return `检查拼写，或先定义变量（如 ${sym || 'x'} = 0）。若是函数，可尝试 sqrt( abs( round( 等。`
+  }
+  if (/未定义函数/.test(msg)) return '检查函数名拼写，可用：sqrt abs round floor ceil min max sum sin cos tan exp log log10 factorial'
+  if (/缺少右括号/.test(msg)) return '在表达式末尾补上一个 )'
+  if (/不完整/.test(msg)) return '在运算符后补上数值，或删除多余的运算符'
+  if (/缺少数值/.test(msg)) return '运算符（如 + - * /）后面需要跟一个数值或括号'
+  if (/除以零/.test(msg)) return '检查分母是否为 0，或先定义分母变量再计算'
+  if (/赋值错误/.test(msg)) return '等号左侧必须是变量名，例如 tax = 0.13'
+  if (/参数/.test(msg)) return '函数需要正确的参数个数，例如 sqrt(9)'
+  if (/无效字符/.test(msg)) return '表达式包含不支持的字符，请删除或替换'
+  if (/数字格式/.test(msg)) return '数字写法有误，例如 1.2.3 或带逗号 1,000 不合法'
+  return '请检查表达式语法后重试'
+}
+
+// 错误详情浮层（点击"公式错误"徽标展开）
+const errPopover = ref({ show: false, lIdx: -1, reason: '', suggest: '', pos: {} })
+function openErrPopover(lIdx, e) {
+  const line = currentSheet.value.lines[lIdx]
+  const reason = line.errorMsg || '未知错误'
+  const r = e.currentTarget.getBoundingClientRect()
+  errPopover.value = {
+    show: true, lIdx, reason, suggest: suggestFix(reason),
+    pos: { left: `${Math.min(r.left, window.innerWidth - 290)}px`, top: `${r.bottom + 6}px` }
+  }
+}
+function closeErrPopover() { errPopover.value = { ...errPopover.value, show: false } }
+
 function safeEval(expr, scope) {
   try { return { ok: true, value: formatResult(math.evaluate(expr, scope)) } }
   catch (e) { return { ok: false, error: e } }
 }
 
-function computeLine(line, scope) {
+function computeLine(line, scope, animate = true) {
+  if (line.pulse === undefined) line.pulse = false
+  if (line.shake === undefined) line.shake = false
+  const prevResult = line.result
+  const prevError = prevResult === '错误'
   const trimmed = line.expr.trim()
-  if (!trimmed) { line.result = ''; line.partial = false; line.errorMsg = ''; return }
+  if (!trimmed) {
+    line.result = ''; line.partial = false; line.errorMsg = ''
+    applyAnim(line, prevResult, prevError, animate); return
+  }
   const full = safeEval(trimmed, scope)
   if (full.ok) {
     line.result = full.value
     line.partial = false
     line.errorMsg = ''
     if (!line.time) line.time = nowTime()
-    return
+    applyAnim(line, prevResult, prevError, animate); return
   }
   const open = (trimmed.match(/\(/g) || []).length
   const close = (trimmed.match(/\)/g) || []).length
@@ -571,7 +785,7 @@ function computeLine(line, scope) {
         line.result = p.value
         line.partial = true
         line.errorMsg = '表达式不完整'
-        return
+        applyAnim(line, prevResult, prevError, animate); return
       }
     }
     // 无部分值可算：赋值输入中（tax=）不算错；单独符号（+ * ( . 等）按错误处理
@@ -580,21 +794,34 @@ function computeLine(line, scope) {
       line.result = ''
       line.partial = false
       line.errorMsg = ''
-      return
+      applyAnim(line, prevResult, prevError, animate); return
     }
     line.result = '错误'
     line.partial = false
     line.errorMsg = analyzeError(full.error)
-    return
+    applyAnim(line, prevResult, prevError, animate); return
   }
   line.result = '错误'
   line.partial = false
   line.errorMsg = analyzeError(full.error)
+  applyAnim(line, prevResult, prevError, animate)
+}
+
+function applyAnim(line, prevResult, prevError, animate) {
+  if (!animate) return
+  if (line.result !== '错误' && line.result && !line.partial && line.result !== prevResult) {
+    line.pulse = false
+    nextTick(() => { line.pulse = true; setTimeout(() => { line.pulse = false }, 650) })
+  }
+  if (line.result === '错误' && !prevError) {
+    line.shake = false
+    nextTick(() => { line.shake = true; setTimeout(() => { line.shake = false }, 500) })
+  }
 }
 
 function rebuildSheetScope(sh) {
   sh.vars = {}
-  for (const ln of sh.lines) computeLine(ln, sh.vars)
+  for (const ln of sh.lines) computeLine(ln, sh.vars, false)
 }
 function rebuildScope() {
   for (const sh of sheets.value) rebuildSheetScope(sh)
@@ -610,9 +837,89 @@ function onExprInput(idx) {
 // ---------- 焦点 / 行导航 ----------
 const exprRefs = []
 const noteRefs = []
-function setExprRef(el, idx) { if (el) exprRefs[idx] = el }
-function setNoteRef(el, idx) { if (el) noteRefs[idx] = el }
+function setExprRef(el, idx) { if (el) exprRefs[idx] = el; else exprRefs[idx] = null }
+function setNoteRef(el, idx) { if (el) noteRefs[idx] = el; else noteRefs[idx] = null }
+const rowRefs = {}
+function setRowRef(el, id) { if (el) rowRefs[id] = el; else delete rowRefs[id] }
+// 把最新行滚动到底部可见区：直接操作滚动容器 paperBody。
+// 行的进入动画约 350ms（max-height 从 0 展开），必须等它结束后再滚，否则布局未稳定会差一点；
+// 这里手动计算目标 scrollTop：让行底边比可视区底边高 GAP 像素（留呼吸间距），而不是死板对齐容器底边。
+function locateRow(id) {
+  const container = paperBody.value
+  if (!container) return
+  const GAP = 12
+  const targetTop = () => {
+    const el = id != null ? rowRefs[id] : null
+    if (el) {
+      const rowRect = el.getBoundingClientRect()
+      const cRect = container.getBoundingClientRect()
+      // row 底边相对于容器内容区顶部的位置
+      const rowBottom = rowRect.bottom - cRect.top + container.scrollTop
+      return Math.max(0, rowBottom + GAP - container.clientHeight)
+    }
+    return Math.max(0, container.scrollHeight - container.clientHeight)
+  }
+  const goBottom = () => {
+    const t = targetTop()
+    container.scrollTo({ top: t, behavior: 'smooth' })
+    // 平滑滚动结束后再算一次目标位置；若仍差一点，瞬时强制到位
+    setTimeout(() => {
+      const t2 = targetTop()
+      if (container.scrollTop < t2 - 1) {
+        container.scrollTo({ top: t2, behavior: 'auto' })
+      }
+    }, 480)
+  }
+  // 等进入动画（约 350ms）结束后再开始滚动定位
+  setTimeout(goBottom, 420)
+}
 
+// 行内输入框获得焦点：高亮当前行，并取消"最新计算行"高亮，避免两个高亮并存
+function onRowFocus(idx) {
+  focusedLine.value = idx
+  if (idx !== latestLineIdx.value) latestLineIdx.value = -1
+  ensureRowVisible(idx)
+}
+
+// 点击行任意区域（输入框/按钮/补全列表除外）自动聚焦到当前行：点公式区聚焦算式，点备注区聚焦备注
+function onRowClick(idx, e) {
+  const t = e.target
+  if (t.closest('input, button, .completion-list')) return
+  if (t.closest('.row-note')) focusNote(idx)
+  else focusExpr(idx)
+}
+
+// 聚焦行若不完整可见，自动翻页定位：底部露一点→滚到顶部；顶部露一点→滚到底部
+function ensureRowVisible(idx) {
+  const sh = currentSheet.value
+  if (!sh || idx == null || idx < 0 || idx >= sh.lines.length) return
+  const container = paperBody.value
+  const el = rowRefs[sh.lines[idx].id]
+  if (!container || !el) return
+  const gap = 8
+  // 目标 scrollTop：把行顶对齐可视区顶（mode='top'）/ 把行底对齐可视区底（mode='bottom'）
+  const targetTop = (mode) => {
+    const rowRect = el.getBoundingClientRect()
+    const cRect = container.getBoundingClientRect()
+    if (mode === 'top') {
+      return Math.max(0, rowRect.top - cRect.top + container.scrollTop - gap)
+    }
+    return Math.max(0, rowRect.bottom - cRect.top + container.scrollTop + gap - container.clientHeight)
+  }
+  const cRect = container.getBoundingClientRect()
+  const rowRect = el.getBoundingClientRect()
+  let mode = null
+  if (rowRect.bottom > cRect.bottom - gap) mode = 'top'      // 底部露不全 → 翻到顶
+  else if (rowRect.top < cRect.top + gap) mode = 'bottom'   // 顶部露不全 → 翻到底
+  if (!mode) return // 已完整可见，不滚动
+  container.scrollTo({ top: targetTop(mode), behavior: 'smooth' })
+  // 兜底：平滑结束后若仍未到位，瞬时校正
+  setTimeout(() => {
+    if (Math.abs(container.scrollTop - targetTop(mode)) > 1) {
+      container.scrollTo({ top: targetTop(mode), behavior: 'auto' })
+    }
+  }, 480)
+}
 function onExprBlur(idx) {
   setTimeout(() => {
     if (noteRefs[idx] && document.activeElement === noteRefs[idx]) return
@@ -625,8 +932,8 @@ function onNoteBlur(idx) {
     if (focusedLine.value === idx) focusedLine.value = -1
   }, 120)
 }
-function focusExpr(idx) { nextTick(() => { exprRefs[idx]?.focus() }) }
-function focusNote(idx) { nextTick(() => { noteRefs[idx]?.focus() }) }
+function focusExpr(idx) { nextTick(() => { exprRefs[idx]?.focus({ preventScroll: true }) }) }
+function focusNote(idx) { nextTick(() => { noteRefs[idx]?.focus({ preventScroll: true }) }) }
 function focusPrevRow(idx) {
   if (idx > 0) focusExpr(idx - 1)
 }
@@ -652,9 +959,38 @@ function onExprTab(idx) {
   }
   focusNote(idx)
 }
+function onExprUp(idx) {
+  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+    const m = completion.value.matches.length
+    completion.value.active = (completion.value.active - 1 + m) % m
+  } else focusPrevRow(idx)
+}
+function onExprDown(idx) {
+  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+    const m = completion.value.matches.length
+    completion.value.active = (completion.value.active + 1) % m
+  } else focusNextRow(idx)
+}
 
 // ---------- 函数自动补全 ----------
-const FUNC_LIST = ['sqrt(', 'abs(', 'round(', 'floor(', 'ceil(', 'min(', 'max(', 'sum(', 'sin(', 'cos(', 'tan(', 'exp(', 'log(', 'log10(', 'factorial(']
+const FUNC_LIST = [
+  { name: 'sqrt(', desc: '平方根' },
+  { name: 'abs(', desc: '绝对值' },
+  { name: 'round(', desc: '四舍五入' },
+  { name: 'floor(', desc: '向下取整' },
+  { name: 'ceil(', desc: '向上取整' },
+  { name: 'min(', desc: '最小值' },
+  { name: 'max(', desc: '最大值' },
+  { name: 'sum(', desc: '求和' },
+  { name: 'sin(', desc: '正弦(弧度)' },
+  { name: 'cos(', desc: '余弦(弧度)' },
+  { name: 'tan(', desc: '正切(弧度)' },
+  { name: 'exp(', desc: 'e的x次方' },
+  { name: 'log(', desc: '自然对数' },
+  { name: 'log10(', desc: '常用对数' },
+  { name: 'factorial(', desc: '阶乘' }
+]
+const FUNC_NAMES = FUNC_LIST.map(f => f.name.replace('(', ''))
 const completion = ref(null)
 function checkCompletion(idx) {
   const input = exprRefs[idx]
@@ -664,7 +1000,7 @@ function checkCompletion(idx) {
   const m = before.match(/([a-zA-Z]{1,})$/)
   if (!m) { completion.value = null; return }
   const word = m[1].toLowerCase()
-  const matches = FUNC_LIST.filter(f => f.toLowerCase().startsWith(word))
+  const matches = FUNC_LIST.filter(f => f.name.toLowerCase().startsWith(word))
   if (!matches.length) { completion.value = null; return }
   completion.value = { lIdx: idx, start: pos - word.length, word, matches, active: 0 }
 }
@@ -673,7 +1009,8 @@ function applyCompletion(ci) {
   const { lIdx, start, word, matches } = completion.value
   const input = exprRefs[lIdx]
   if (!input) return
-  const full = matches[ci] || matches[completion.value.active]
+  const item = matches[ci] || matches[completion.value.active]
+  const full = item.name
   const next = input.value.slice(0, start) + full + input.value.slice(start + word.length)
   currentSheet.value.lines[lIdx].expr = next
   completion.value = null
@@ -686,27 +1023,37 @@ function applyCompletion(ci) {
 
 // ---------- 行操作 ----------
 function delLine(idx) {
+  const only = currentSheet.value.lines.length <= 1
   pushUndo()
-  if (currentSheet.value.lines.length > 1) {
+  if (!only) {
     currentSheet.value.lines.splice(idx, 1)
   } else {
     currentSheet.value.lines[0] = { id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }
   }
   rebuildSheetScope(currentSheet.value)
+  toast(only ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
 function addFromBottom() {
   const parts = quickExpr.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-  if (!parts.length) { bottomInput.value?.focus(); return }
+  if (!parts.length) { bottomInput.value?.focus({ preventScroll: true }); return }
   const sh = currentSheet.value
   if (!sh.vars) sh.vars = {}
+  let lastId = null
   for (const p of parts) {
     const line = { id: uid(), expr: p, result: '', note: '', time: '', errorMsg: '', partial: false }
     sh.lines.push(line)
     computeLine(line, sh.vars)
+    lastId = line.id
   }
   quickExpr.value = ''
-  nextTick(() => { bottomInput.value?.focus(); scrollToBottom() })
+  const newIdx = sh.lines.length - 1
+  focusedLine.value = newIdx // 高亮刚计算完成的行
+  latestLineIdx.value = newIdx // 独立标记最新计算行，不受 blur 影响
+  nextTick(() => {
+    bottomInput.value?.focus({ preventScroll: true })
+    if (lastId) locateRow(lastId) // 滚动定位到刚算完的那一行
+  })
 }
 
 function historyUp() {
@@ -717,27 +1064,66 @@ function historyUp() {
   }
 }
 
-function scrollToBottom() {
-  nextTick(() => { if (paperBody.value) paperBody.value.scrollTop = paperBody.value.scrollHeight })
+// 底部公式框 ↑ 键：空框→先召回历史（有历史时）；框内有内容→进入"选择行"模式（聚焦匹配公式的行，并清空底部框，两模式互斥）
+function bottomUp() {
+  const sh = currentSheet.value
+  const lines = sh.lines
+  if (!quickExpr.value.trim()) {
+    // 空框：有历史先召回填入，下次再按 ↑ 切选择行；没历史但还有行 → 直接进选择行模式
+    const hasHistory = lines.some(l => l.expr.trim())
+    if (hasHistory) {
+      historyUp()
+      return
+    }
+    if (lines.length) {
+      quickExpr.value = '' // 底部框保持待命空态
+      focusExpr(lines.length - 1)
+      return
+    }
+    return
+  }
+  if (!lines.length) return
+  const q = quickExpr.value.trim()
+  let target = lines.length - 1 // 默认最后一行
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].expr.trim() === q) { target = i; break }
+  }
+  quickExpr.value = '' // 进入选择行模式：清空底部框
+  focusExpr(target)
 }
 
 // ---------- 行拖拽排序 ----------
 const dragIndex = ref(-1)
+const dropTarget = ref({ idx: -1, pos: 'below' })
 function onDragStart(e, fromIdx) {
   dragIndex.value = fromIdx
   e.dataTransfer.effectAllowed = 'move'
   e.dataTransfer.setData('text/plain', String(fromIdx))
 }
-function onDrop(e, toIdx) {
-  const from = Number(e.dataTransfer.getData('text/plain'))
-  if (Number.isNaN(from) || from === toIdx) return
-  const lines = currentSheet.value.lines
-  const [item] = lines.splice(from, 1)
-  lines.splice(toIdx, 0, item)
-  rebuildSheetScope(currentSheet.value)
-  toast('已调整顺序')
+function onDragOver(e, idx) {
+  if (dragIndex.value === -1) return
+  const r = e.currentTarget.getBoundingClientRect()
+  const pos = (e.clientY - r.top) < r.height / 2 ? 'above' : 'below'
+  // 仅在插入位置变化时更新，避免 dragover 高频（每秒数十次）触发重渲染
+  if (dropTarget.value.idx !== idx || dropTarget.value.pos !== pos) {
+    dropTarget.value = { idx, pos }
+  }
 }
-function onDragEnd() { dragIndex.value = -1 }
+function onDrop(e) {
+  const from = Number(e.dataTransfer.getData('text/plain'))
+  if (Number.isNaN(from) || dropTarget.value.idx === -1) return
+  const target = dropTarget.value
+  const lines = currentSheet.value.lines
+  let insertAt = target.pos === 'above' ? target.idx : target.idx + 1
+  if (from === insertAt || from === insertAt - 1) { dropTarget.value = { idx: -1, pos: 'below' }; return }
+  const [item] = lines.splice(from, 1)
+  if (from < insertAt) insertAt--
+  lines.splice(insertAt, 0, item)
+  rebuildSheetScope(currentSheet.value)
+  dropTarget.value = { idx: -1, pos: 'below' }
+  toast('已调整顺序', { type: 'success', action: { label: '撤销', run: undo } })
+}
+function onDragEnd() { dragIndex.value = -1; dropTarget.value = { idx: -1, pos: 'below' } }
 
 // ---------- 菜单（导出 / 备份 / 行复制） ----------
 const copyMenu = ref(null) // { lIdx }
@@ -765,15 +1151,26 @@ function openCopyMenu(lIdx, e) {
   menuPos.value = { left: `${Math.min(rect.left, window.innerWidth - 230)}px`, top: `${rect.bottom + 6}px` }
 }
 function closeMenus() { copyMenu.value = null }
+const copyFeedbackIdx = ref(-1)
+let copyFbTimer = null
+function showCopyFeedback(idx) {
+  copyFeedbackIdx.value = idx
+  if (copyFbTimer) clearTimeout(copyFbTimer)
+  copyFbTimer = setTimeout(() => { copyFeedbackIdx.value = -1 }, 1500)
+}
 function copyRowAction(type) {
   if (!copyMenu.value) return
-  const line = currentSheet.value.lines[copyMenu.value.lIdx]
+  const lIdx = copyMenu.value.lIdx
+  const line = currentSheet.value.lines[lIdx]
   const text = type === 'result' ? (line.result || '')
     : type === 'expr' ? line.expr
     : lineFullText(line)
   closeMenus()
   if (!text) { toast('此行暂无内容'); return }
-  copyText(text)
+  copyText(text).then(ok => {
+    if (ok) showCopyFeedback(lIdx)
+    else toast('复制失败：剪贴板不可用', { type: 'error' })
+  })
 }
 
 // ---------- 复制 / 导出 ----------
@@ -791,21 +1188,14 @@ function legacyCopy(text) {
   } catch (e) { return false }
 }
 async function copyText(text) {
-  if (!text) return
+  if (!text) return false
   try {
     await navigator.clipboard.writeText(text)
-    toast('已复制到剪贴板')
+    return true
   } catch (e) {
-    const ok = legacyCopy(text)
-    toast(ok ? '已复制到剪贴板' : '复制失败：剪贴板不可用')
+    return legacyCopy(text)
   }
 }
-function copyLine(line) {
-  const v = line.result
-  if (!v || v === '错误') { toast('此行暂无结果'); return }
-  copyText(v)
-}
-
 // ---------- 稿纸操作 ----------
 function addSheet() {
   sheets.value.push({ id: uid(), name: `稿纸${sheets.value.length + 1}`, vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] })
@@ -814,6 +1204,7 @@ function addSheet() {
 function switchSheet(idx) {
   activeSheetIndex.value = idx
   focusedLine.value = -1
+  latestLineIdx.value = -1
   closeMenus()
 }
 function startRename(idx) {
@@ -835,7 +1226,7 @@ function cancelRename() {
   editingIndex.value = -1
 }
 async function delSheet(idx) {
-  if (sheets.value.length <= 1) { toast('至少保留一份稿纸'); return }
+  if (sheets.value.length <= 1) { toast('至少保留一份稿纸', { type: 'error' }); return }
   const ok = await askConfirm(`确定删除「${sheets.value[idx].name}」？`)
   if (!ok) return
   pushUndo()
@@ -850,6 +1241,9 @@ async function clearSheet() {
   pushUndo()
   currentSheet.value.lines = [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }]
   currentSheet.value.vars = {}
+  focusedLine.value = -1
+  latestLineIdx.value = -1
+  toast('已清空当前稿纸', { type: 'success', action: { label: '撤销', run: undo } })
 }
 async function clearAllSheets() {
   const ok = await askConfirm('确定清空所有稿纸？此操作不可恢复。')
@@ -857,11 +1251,33 @@ async function clearAllSheets() {
   pushUndo()
   sheets.value = [{ id: uid(), name: '稿纸1', vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] }]
   activeSheetIndex.value = 0
+  focusedLine.value = -1
+  latestLineIdx.value = -1
+  toast('已清空所有稿纸', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
 // ---------- 汇率填入公式（独立按钮，不影响其他功能） ----------
 const rateLoading = ref(false)
+const rateCard = ref(null) // { rate, time, nextUpdate, source }
+const rateCountdown = ref(0) // 剩余秒数，倒计时结束自动关闭
+let rateTimer = null
+function startRateCountdown() {
+  clearInterval(rateTimer)
+  rateCountdown.value = 5
+  rateTimer = setInterval(() => {
+    rateCountdown.value -= 1
+    if (rateCountdown.value <= 0) closeRateCard()
+  }, 1000)
+}
+function closeRateCard() {
+  clearInterval(rateTimer)
+  rateCountdown.value = 0
+  rateCard.value = null
+  // 关闭后自动把光标聚焦回底部计算公式框
+  nextTick(() => { bottomInput.value?.focus() })
+}
 async function fetchRateToInput() {
+  if (rateLoading.value) return
   rateLoading.value = true
   try {
     const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(8000) })
@@ -870,28 +1286,52 @@ async function fetchRateToInput() {
     const cny = data.rates?.CNY
     if (!cny) throw new Error('no cny')
     const val = Number(cny).toFixed(6)
-    // 填入底部公式框：空则直接填；末尾是运算符则追加；否则补 * 再追加
-    if (quickExpr.value.trim()) {
-      const t = quickExpr.value.trimEnd()
-      quickExpr.value = /[+\-*/^%]$/.test(t) ? t + val : t + '*' + val
-    } else {
-      quickExpr.value = val
+    // 自动填入底部公式框（沿用原行为）
+    fillRateToFormula(val)
+    // 弹出说明卡片，把“1 美元 = 多少人民币、数据哪来、何时更新、何时失效”讲清楚
+    rateCard.value = {
+      rate: val,
+      time: data.time_last_update_utc || '',
+      nextUpdate: data.time_next_update_utc || '',
+      source: 'open.er-api.com',
+      filled: true
     }
-    toast(`USD→CNY ${val} 已填入`)
-    // 填入后光标回到公式框末尾，方便继续输入
-    nextTick(() => {
-      const el = bottomInput.value
-      if (el) {
-        el.focus()
-        const len = el.value.length
-        el.setSelectionRange(len, len)
-      }
-    })
+    startRateCountdown()
   } catch (e) {
-    toast('获取汇率失败，请检查网络')
+    toast('获取汇率失败，请检查网络', { type: 'error', action: { label: '重试', run: () => fetchRateToInput() } })
   } finally {
     rateLoading.value = false
   }
+}
+function fmtRateTime(s) {
+  if (!s) return '—'
+  try {
+    const d = new Date(s)
+    if (Number.isNaN(d.getTime())) return s
+    return d.toLocaleString('zh-CN', {
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+      timeZoneName: 'short'
+    })
+  } catch (e) { return s }
+}
+// 把汇率值填入底部公式框：空则直接填；末尾是运算符则追加；否则补 * 再追加
+function fillRateToFormula(val) {
+  if (quickExpr.value.trim()) {
+    const t = quickExpr.value.trimEnd()
+    quickExpr.value = /[+\-*/^%]$/.test(t) ? t + val : t + '*' + val
+  } else {
+    quickExpr.value = val
+  }
+  // 填入后光标回到公式框末尾，方便继续输入
+  nextTick(() => {
+    const el = bottomInput.value
+    if (el) {
+      el.focus()
+      const len = el.value.length
+      el.setSelectionRange(len, len)
+    }
+  })
 }
 
 // ---------- 主题 ----------
@@ -899,6 +1339,11 @@ function toggleTheme() { theme.value = theme.value === 'light' ? 'dark' : 'light
 
 // ---------- 全局快捷键 ----------
 function onGlobalKeydown(e) {
+  if (confirmState.value.show) {
+    if (e.key === 'Escape') { e.preventDefault(); confirmCancel() }
+    else if (e.key === 'Enter') { e.preventDefault(); confirmOk() }
+    return
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     const tag = document.activeElement?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
@@ -908,11 +1353,11 @@ function onGlobalKeydown(e) {
 }
 
 // ---------- 持久化 ----------
-async function saveState() {
+function saveState() {
   const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value }
   try { localStorage.setItem('calc_paper_state', JSON.stringify(data)) } catch (e) {}
 }
-async function loadState() {
+function loadState() {
   try {
     const raw = localStorage.getItem('calc_paper_state')
     if (raw) return JSON.parse(raw)
@@ -954,7 +1399,33 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  clearInterval(rateTimer)
 })
+
+// 变量值悬浮提示（算式中引用已定义变量时，hover 显示当前值）
+const varTip = ref({ show: false, idx: -1, vars: [], pos: {} })
+function onExprHover(lIdx, e) {
+  const sh = currentSheet.value
+  const vars = sh.vars || {}
+  const line = sh.lines[lIdx]
+  const tokens = (line.expr.match(/[a-zA-Z_][a-zA-Z0-9_]*/g) || [])
+  const seen = new Set()
+  const list = []
+  for (const name of tokens) {
+    if (FUNC_NAMES.includes(name) || name === 'pi' || name === 'e') continue
+    if (!(name in vars)) continue
+    if (seen.has(name)) continue
+    seen.add(name)
+    list.push({ name, value: displayResult(String(vars[name])) })
+  }
+  if (!list.length) { varTip.value = { ...varTip.value, show: false }; return }
+  const r = e.currentTarget.getBoundingClientRect()
+  varTip.value = {
+    show: true, idx: lIdx, vars: list,
+    pos: { left: `${r.left}px`, top: `${r.bottom + 6}px` }
+  }
+}
+function hideVarTip() { varTip.value = { ...varTip.value, show: false } }
 </script>
 
 <style>
@@ -1001,6 +1472,13 @@ onUnmounted(() => {
   --focus-ring: rgba(10, 132, 255, 0.22);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* 主题切换平滑：仅对主题色块容器做过渡，避免给全部元素强加过渡（既拖慢输入/hover 反馈，又增加样式计算开销） */
+.app-wrapper, .app-card, .card-header, .sheet-bar, .paper-body, .card-footer,
+.bottom-input, .calc-row, .sheet-tab, .tool-btn, .btn-new-sheet, .modal-card,
+.rate-card, .popover, .tooltip, .modal-btn, .icon-btn, .row-icon, .rename-input,
+.help-table td, .guide-card, .result-block {
+  transition: background-color .3s ease, color .3s ease, border-color .3s ease;
+}
 html, body, #app { height: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -1083,7 +1561,7 @@ body {
 
 
 .paper-body { flex: 1; overflow-y: auto; padding: 6px 0; }
-.calc-list { padding: 0 16px; }
+.calc-list { padding: 0 16px; position: relative; }
 
 /* 空状态引导 */
 .guide-card {
@@ -1110,7 +1588,7 @@ body {
   padding: 12px 14px;
   margin-bottom: 8px;
   border: 1px solid transparent;
-  transition: background .15s, border-color .15s, box-shadow .15s, opacity .15s;
+  transition: background-color .3s ease, border-color .3s ease, box-shadow .2s ease, opacity .2s ease;
 }
 .calc-row:hover { background: var(--row-hover); }
 .calc-row.focused {
@@ -1122,6 +1600,17 @@ body {
   content: '';
   position: absolute; left: -1px; top: 50%; transform: translateY(-50%);
   width: 4px; height: 58%; border-radius: 4px; background: var(--accent);
+}
+/* 最新计算行：与 focused 区分，稳定指示"刚算完的那一行"，不受 blur 影响 */
+.calc-row.latest {
+  background: var(--focus-bg);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring), 0 6px 16px rgba(0, 113, 227, 0.10);
+}
+.calc-row.latest::before {
+  content: '';
+  position: absolute; left: -1px; top: 50%; transform: translateY(-50%);
+  width: 4px; height: 64%; border-radius: 4px; background: var(--accent);
 }
 .calc-row.dragging { opacity: 0.45; }
 
@@ -1154,10 +1643,13 @@ body {
   min-width: 140px;
 }
 .completion-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: 6px 12px; font-size: 13px; cursor: pointer;
-  font-family: "SF Mono", Consolas, monospace;
 }
-.completion-item:hover, .completion-item.active { background: var(--focus-bg); color: var(--accent); }
+.completion-name { font-family: "SF Mono", Consolas, monospace; font-weight: 600; }
+.completion-desc { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.completion-item:hover, .completion-item.active { background: var(--focus-bg); }
+.completion-item:hover .completion-name, .completion-item.active .completion-name { color: var(--accent); }
 
 .result-block {
   flex: 0 0 auto; max-width: 55%;
@@ -1368,10 +1860,213 @@ body {
 /* Toast */
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.82); color: #fff;
-  padding: 9px 18px; border-radius: 100px;
+  display: flex; align-items: center; gap: 8px;
+  color: #fff; padding: 10px 16px; border-radius: 100px;
   font-size: 13px; z-index: 99; backdrop-filter: blur(8px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+  max-width: 80vw;
 }
+.toast.info { background: rgba(0, 0, 0, 0.82); }
+.toast.success { background: rgba(52, 199, 89, 0.94); }
+.toast.error { background: rgba(255, 59, 48, 0.94); }
+.toast-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.toast-msg { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-action {
+  border: none; background: rgba(255, 255, 255, 0.22); color: #fff;
+  padding: 4px 12px; border-radius: 100px; font-size: 12px; font-weight: 600;
+  cursor: pointer; margin-left: 4px; flex: 0 0 auto;
+}
+.toast-action:hover { background: rgba(255, 255, 255, 0.34); }
+.toast-slide-enter-active, .toast-slide-leave-active { transition: opacity .3s ease, transform .3s cubic-bezier(.22,1,.36,1); }
+.toast-slide-enter-from, .toast-slide-leave-to { opacity: 0; transform: translate(-50%, 24px); }
+
+/* 复制就地反馈 */
+.copy-feedback {
+  font-size: 12px; color: #34c759; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 3px;
+  animation: fadeInUp .25s ease;
+}
+/* 错误徽标（可点击展开） */
+.err-badge { cursor: pointer; user-select: none; }
+.err-badge:hover { filter: brightness(1.06); }
+/* 错误详情浮层 */
+.err-popover { min-width: 260px; max-width: 320px; padding: 12px 14px; }
+.err-title { font-size: 12px; font-weight: 700; color: var(--error); margin-bottom: 6px; letter-spacing: .5px; }
+.err-reason { font-size: 13px; color: var(--text); line-height: 1.5; word-break: break-word; }
+.err-suggest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); line-height: 1.6; }
+.err-suggest-label {
+  display: inline-block; font-size: 11px; font-weight: 700; color: var(--accent);
+  background: var(--focus-bg); padding: 1px 7px; border-radius: 100px; margin-right: 6px;
+}
+/* 自定义 tooltip（带箭头，长文本自动折行并限制宽度） */
+.tooltip {
+  position: fixed; z-index: 200; transform: translateX(-50%);
+  background: rgba(30, 33, 40, 0.94); color: #fff;
+  padding: 7px 12px; border-radius: 8px; font-size: 12px; line-height: 1.45;
+  max-width: 220px; text-align: left; pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  overflow-wrap: break-word; word-break: break-word;
+}
+[data-theme="dark"] .tooltip { background: rgba(245, 245, 247, 0.95); color: #1d1d1f; }
+.tooltip::after {
+  content: ''; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-bottom: 5px solid rgba(30, 33, 40, 0.94);
+}
+[data-theme="dark"] .tooltip::after { border-bottom-color: rgba(245, 245, 247, 0.95); }
+/* 汇率加载旋转 */
+.spinner {
+  width: 14px; height: 14px; display: inline-block;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* 汇率说明卡片 */
+.rate-mask {
+  position: fixed; left: 0; right: 0; bottom: 0; top: 0;
+  background: rgba(0, 0, 0, 0.34); display: flex;
+  align-items: center; justify-content: center; z-index: 120;
+  backdrop-filter: blur(6px);
+}
+.rate-card {
+  position: relative; width: min(380px, 92vw);
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-radius: 20px;
+  padding: 22px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  animation: ratePop .3s cubic-bezier(.22, 1, .36, 1);
+  overflow: hidden;
+}
+@keyframes ratePop {
+  from { opacity: 0; transform: scale(.92) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.rate-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px;
+}
+.rate-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 700; color: var(--text);
+}
+.rate-flag {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; font-family: "SF Mono", Consolas, monospace;
+}
+.rate-close {
+  width: 28px; height: 28px; border: none; border-radius: 50%;
+  background: var(--focus-bg); color: var(--muted);
+  font-size: 18px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, color .15s;
+}
+.rate-close:hover { background: var(--border); color: var(--text); }
+
+.rate-hero {
+  background: linear-gradient(180deg, var(--focus-bg) 0%, transparent 100%);
+  border: 1px solid var(--border); border-radius: 16px;
+  padding: 18px; text-align: center; margin-bottom: 18px;
+}
+.rate-pair {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  letter-spacing: .6px; margin-bottom: 8px;
+}
+.rate-value { display: flex; align-items: baseline; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.rate-number {
+  font-size: 34px; font-weight: 700; color: var(--accent);
+  font-family: "SF Mono", Consolas, monospace; line-height: 1;
+}
+.rate-unit { font-size: 15px; color: var(--muted); }
+
+.rate-meta {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px; background: var(--bg); border-radius: 14px;
+  margin-bottom: 16px;
+}
+.rate-meta-row { display: flex; align-items: center; gap: 12px; }
+.rate-meta-icon {
+  width: 18px; height: 18px; flex: 0 0 18px; color: var(--muted);
+}
+.rate-meta-item { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.rate-meta-label { font-size: 12px; color: var(--muted); }
+.rate-meta-value { font-size: 13px; color: var(--text); word-break: break-all; font-family: "SF Mono", Consolas, monospace; }
+
+.rate-note {
+  font-size: 12px; line-height: 1.65; color: var(--muted);
+  margin-bottom: 16px; padding: 0 2px;
+}
+
+.rate-filled-hint {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: -6px 0 16px;
+  font-size: 12px; font-weight: 600; color: #34c759;
+}
+.rate-hint-icon { width: 14px; height: 14px; }
+
+.rate-progress {
+  position: absolute; top: 0; left: 0; height: 3px; width: 100%;
+  background: var(--accent); border-radius: 18px 18px 0 0;
+  transform-origin: left center; animation: rateShrink 5s linear forwards;
+}
+@keyframes rateShrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+.rate-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding-top: 16px; margin-top: 4px; border-top: 1px solid var(--border);
+}
+.rate-count {
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.rate-btn-single {
+  border: none; border-radius: 12px; padding: 9px 22px;
+  background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  transition: transform .1s, filter .15s;
+}
+.rate-btn-single:hover { filter: brightness(1.05); }
+.rate-btn-single:active { transform: scale(.97); }
+
+/* 行增删动画 */
+.row-enter-active, .row-leave-active { transition: all .35s cubic-bezier(.22,1,.36,1); overflow: hidden; }
+.row-enter-from { opacity: 0; transform: translateY(14px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+.row-leave-to { opacity: 0; transform: translateY(-8px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+.row-leave-active { position: absolute; left: 16px; right: 16px; margin-bottom: 0; }
+/* 结果出现/变化动画 */
+@keyframes resultPulse {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.12); color: var(--accent); }
+  100% { transform: scale(1); }
+}
+.calc-row.pulse .result-value { animation: resultPulse .65s ease; }
+/* 错误行抖动 */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-5px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+.calc-row.shake { animation: shake .5s ease; }
+/* 拖拽插入指示线 */
+.calc-row.drop-above::before, .calc-row.drop-below::after {
+  content: ''; position: absolute; left: 14px; right: 14px; height: 2px;
+  background: var(--accent); border-radius: 2px; z-index: 5;
+}
+.calc-row.drop-above::before { top: -5px; }
+.calc-row.drop-below::after { bottom: -5px; }
+
+/* 变量值悬浮提示 */
+.var-tip {
+  position: fixed; z-index: 150;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14);
+  padding: 6px 10px; min-width: 120px;
+}
+.var-tip-row { display: flex; align-items: baseline; gap: 6px; font-size: 13px; padding: 2px 0; }
+.var-tip-name { font-family: "SF Mono", Consolas, monospace; font-weight: 600; color: var(--accent); }
+.var-tip-eq { color: var(--muted); }
+.var-tip-val { font-family: "SF Mono", Consolas, monospace; color: var(--text); }
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
