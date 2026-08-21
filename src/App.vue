@@ -86,22 +86,22 @@
             @dragend="onDragEnd"
           >
             <div class="row-main">
-              <span class="drag-handle" v-tip="'拖动排序'" draggable="true">⋮⋮</span>
-              <div class="expr-wrap" @mouseenter="onExprHover(lIdx, $event)" @mouseleave="hideVarTip">
-                <input
+            <div class="expr-wrap" @mouseenter="onExprHover(lIdx, $event)" @mouseleave="hideVarTip">
+                <textarea
                   :ref="(el) => setExprRef(el, lIdx)"
                   v-model="line.expr"
                   @input="onExprInput(lIdx)"
                   @keydown.enter.prevent="onExprEnter(lIdx)"
                   @keydown.tab.prevent="onExprTab(lIdx)"
-                  @keydown.up.prevent="onExprUp(lIdx)"
-                  @keydown.down.prevent="onExprDown(lIdx)"
+                  @keydown.up="onExprUp(lIdx, $event)"
+                  @keydown.down="onExprDown(lIdx, $event)"
                   @focus="onRowFocus(lIdx)"
                   @blur="onExprBlur(lIdx)"
-                  class="expr-input"
+                  class="expr-input mono-textarea"
                   placeholder="计算公式（回车跳下一行）"
                   spellcheck="false"
-                />
+                  rows="1"
+                ></textarea>
                 <!-- 函数自动补全下拉 -->
                 <div v-if="completion && completion.lIdx === lIdx && completion.matches.length" class="completion-list">
                   <div
@@ -137,7 +137,10 @@
             </div>
 
             <div class="row-meta">
-              <span class="line-time" v-if="line.time">{{ line.time }}</span>
+              <div class="row-meta-left">
+                <span class="drag-handle" v-tip="'拖动排序'" draggable="true">⋮⋮</span>
+                <span class="line-time" v-if="line.time">{{ line.time }}</span>
+              </div>
               <span v-if="copyFeedbackIdx === lIdx" class="copy-feedback">✓ 已复制</span>
               <div class="row-actions">
                 <button class="row-icon" @click="openCopyMenu(lIdx, $event)" v-tip="'复制（结果/算式/整行）'">⧉</button>
@@ -154,9 +157,10 @@
           <textarea
             ref="bottomInput"
             v-model="quickExpr"
+            @input="onQuickInput"
             @keydown.enter.prevent="addFromBottom"
             @keydown.up.prevent="bottomUp"
-            class="quick-input"
+            class="quick-input mono-textarea"
             rows="1"
             placeholder="计算公式（支持粘贴多行，↑ 调历史，再↑ 选行）"
             spellcheck="false"
@@ -515,6 +519,11 @@ function uid() {
   return `${Date.now().toString(36)}-${uidSeq}-${Math.random().toString(36).slice(2, 7)}`
 }
 
+// 新建一行数据的工厂（统一默认字段，避免各处手写字面量不一致）
+function newLine() {
+  return { id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }
+}
+
 // ---------- 数据 ----------
 // 稿纸默认 0 行（不预留空行），所有行由用户操作（底部回车/载入示例等）产生
 const sheets = ref([
@@ -528,7 +537,7 @@ const isSheetEmpty = computed(() => !currentSheet.value.lines.some(l => l.expr.t
 const editingIndex = ref(-1)
 const editingName = ref('')
 const renameInputs = []
-function setRenameInput(el, idx) { if (el) renameInputs[idx] = el }
+function setRenameInput(el, idx) { if (el) renameInputs[idx] = el; else delete renameInputs[idx] }
 const focusedLine = ref(-1)
 const latestLineIdx = ref(-1) // 最新通过底部公式框计算出来的行
 const quickExpr = ref('')
@@ -580,11 +589,11 @@ function dismissGuide() {
 function loadExample() {
   pushUndo()
   currentSheet.value.lines = [
-    { id: uid(), expr: '55+888+999', result: '', note: '订单金额', time: '', errorMsg: '', partial: false },
-    { id: uid(), expr: '1942*0.85', result: '', note: '85折后', time: '', errorMsg: '', partial: false },
-    { id: uid(), expr: 'tax=0.13', result: '', note: '税率变量', time: '', errorMsg: '', partial: false },
-    { id: uid(), expr: '1650*tax', result: '', note: '含税额', time: '', errorMsg: '', partial: false },
-    { id: uid(), expr: 'min(1650, 1942)', result: '', note: '聚合函数', time: '', errorMsg: '', partial: false }
+    { ...newLine(), expr: '55+888+999', note: '订单金额' },
+    { ...newLine(), expr: '1942*0.85', note: '85折后' },
+    { ...newLine(), expr: 'tax=0.13', note: '税率变量' },
+    { ...newLine(), expr: '1650*tax', note: '含税额' },
+    { ...newLine(), expr: 'min(1650, 1942)', note: '聚合函数' }
   ]
   rebuildSheetScope(currentSheet.value)
   dismissGuide()
@@ -844,15 +853,39 @@ function onExprInput(idx) {
     }
   }
   checkCompletion(idx)
+  autosizeExpr(exprRefs[idx]) // 兜底：textarea 按内容自适应高度
 }
 
 // ---------- 焦点 / 行导航 ----------
 const exprRefs = []
 const noteRefs = []
-function setExprRef(el, idx) { if (el) exprRefs[idx] = el; else exprRefs[idx] = null }
-function setNoteRef(el, idx) { if (el) noteRefs[idx] = el; else noteRefs[idx] = null }
+function setExprRef(el, idx) { if (el) exprRefs[idx] = el; else delete exprRefs[idx] }
+function setNoteRef(el, idx) { if (el) noteRefs[idx] = el; else delete noteRefs[idx] }
 const rowRefs = {}
 function setRowRef(el, id) { if (el) rowRefs[id] = el; else delete rowRefs[id] }
+
+// 自适应 textarea 高度（不支持 CSS field-sizing 的浏览器兜底；支持的浏览器交给 CSS，避免双机制冲突）
+const FIELD_SIZING_SUPPORTED = typeof CSS !== 'undefined' && CSS.supports && CSS.supports('field-sizing', 'content')
+function autosizeExpr(el) {
+  if (!el || FIELD_SIZING_SUPPORTED) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+function autosizeAllExpr() {
+  for (let i = 0; i < exprRefs.length; i++) autosizeExpr(exprRefs[i])
+}
+// 底部公式框输入：内容高度随动（兜底浏览器）
+function onQuickInput() {
+  autosizeExpr(bottomInput.value)
+}
+
+// 滚动兜底定时器统一登记，组件卸载时全部清理，避免销毁后仍触发滚动
+const scrollTimers = new Set()
+function laterScroll(fn, ms) {
+  const t = setTimeout(() => { scrollTimers.delete(t); fn() }, ms)
+  scrollTimers.add(t)
+  return t
+}
 // 把最新行滚动到底部可见区：直接操作滚动容器 paperBody。
 // 行的进入动画约 350ms（max-height 从 0 展开），必须等它结束后再滚，否则布局未稳定会差一点；
 // 这里手动计算目标 scrollTop：让行底边比可视区底边高 GAP 像素（留呼吸间距），而不是死板对齐容器底边。
@@ -875,7 +908,7 @@ function locateRow(id) {
     const t = targetTop()
     container.scrollTo({ top: t, behavior: 'smooth' })
     // 平滑滚动结束后再算一次目标位置；若仍差一点，瞬时强制到位
-    setTimeout(() => {
+    laterScroll(() => {
       const t2 = targetTop()
       if (container.scrollTop < t2 - 1) {
         container.scrollTo({ top: t2, behavior: 'auto' })
@@ -883,7 +916,7 @@ function locateRow(id) {
     }, 480)
   }
   // 等进入动画（约 350ms）结束后再开始滚动定位
-  setTimeout(goBottom, 420)
+  laterScroll(goBottom, 420)
 }
 
 // 行内输入框获得焦点：高亮当前行，并取消"最新计算行"高亮，避免两个高亮并存
@@ -902,7 +935,7 @@ function selectRow(idx) {
 // 点击行任意区域：输入框交给原生聚焦；按钮仅选中高亮不抢焦点；其余区域聚焦算式/备注
 function onRowClick(idx, e) {
   const t = e.target
-  if (t.closest('input, .completion-list')) return
+  if (t.closest('input, textarea, .completion-list')) return
   if (t.closest('button')) { selectRow(idx); return } // 复制/删除等按钮：行选中效果
   if (t.closest('.row-note')) focusNote(idx)
   else focusExpr(idx)
@@ -933,7 +966,7 @@ function ensureRowVisible(idx) {
   if (!mode) return // 已完整可见，不滚动
   container.scrollTo({ top: targetTop(mode), behavior: 'smooth' })
   // 兜底：平滑结束后若仍未到位，瞬时校正
-  setTimeout(() => {
+  laterScroll(() => {
     if (Math.abs(container.scrollTop - targetTop(mode)) > 1) {
       container.scrollTo({ top: targetTop(mode), behavior: 'auto' })
     }
@@ -962,9 +995,13 @@ function focusNextRow(idx) {
   else nextTick(() => bottomInput.value?.focus({ preventScroll: true }))
 }
 
+// 当前行是否存在可用的补全候选（Enter/Tab/↑↓ 共用）
+function hasCompletion(idx) {
+  return !!(completion.value && completion.value.lIdx === idx && completion.value.matches.length)
+}
 // 回车：有补全先补全，否则跳下一行
 function onExprEnter(idx) {
-  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+  if (hasCompletion(idx)) {
     applyCompletion(completion.value.active)
     return
   }
@@ -972,23 +1009,38 @@ function onExprEnter(idx) {
 }
 // Tab：有补全先补全，否则跳备注
 function onExprTab(idx) {
-  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+  if (hasCompletion(idx)) {
     applyCompletion(completion.value.active)
     return
   }
   focusNote(idx)
 }
-function onExprUp(idx) {
-  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+// ↑↓：补全下拉时切换候选；行内 textarea 内容多行（软换行也算）时交还默认光标移动，单行时才跳行
+function isExprMultiLine(idx) {
+  const el = exprRefs[idx]
+  return !!el && el.scrollHeight > el.clientHeight + 2
+}
+function onExprUp(idx, e) {
+  if (hasCompletion(idx)) {
     const m = completion.value.matches.length
     completion.value.active = (completion.value.active - 1 + m) % m
-  } else focusPrevRow(idx)
+    e.preventDefault()
+    return
+  }
+  if (isExprMultiLine(idx)) return // 多行：允许光标上移
+  e.preventDefault()
+  focusPrevRow(idx)
 }
-function onExprDown(idx) {
-  if (completion.value && completion.value.lIdx === idx && completion.value.matches.length) {
+function onExprDown(idx, e) {
+  if (hasCompletion(idx)) {
     const m = completion.value.matches.length
     completion.value.active = (completion.value.active + 1) % m
-  } else focusNextRow(idx)
+    e.preventDefault()
+    return
+  }
+  if (isExprMultiLine(idx)) return // 多行：允许光标下移
+  e.preventDefault()
+  focusNextRow(idx)
 }
 
 // ---------- 函数自动补全 ----------
@@ -1064,11 +1116,12 @@ async function delLine(idx) {
 function addFromBottom() {
   const parts = quickExpr.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
   if (!parts.length) { bottomInput.value?.focus({ preventScroll: true }); return }
+  pushUndo() // 新增行可撤销（Ctrl+Z 或 toast）
   const sh = currentSheet.value
   if (!sh.vars) sh.vars = {}
   let lastId = null
   for (const p of parts) {
-    const line = { id: uid(), expr: p, result: '', note: '', time: '', errorMsg: '', partial: false }
+    const line = { ...newLine(), expr: p }
     sh.lines.push(line)
     computeLine(line, sh.vars)
     lastId = line.id
@@ -1079,6 +1132,7 @@ function addFromBottom() {
   latestLineIdx.value = newIdx // 独立标记最新计算行，不受 blur 影响
   nextTick(() => {
     bottomInput.value?.focus({ preventScroll: true })
+    autosizeExpr(bottomInput.value) // 清空后底部框高度回缩（兜底浏览器）
     if (lastId) locateRow(lastId) // 滚动定位到刚算完的那一行
   })
 }
@@ -1087,7 +1141,11 @@ function historyUp() {
   if (quickExpr.value) return
   const lines = currentSheet.value.lines
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].expr.trim()) { quickExpr.value = lines[i].expr; return }
+    if (lines[i].expr.trim()) {
+      quickExpr.value = lines[i].expr
+      nextTick(() => autosizeExpr(bottomInput.value)) // 兜底浏览器：召回后高度随内容
+      return
+    }
   }
 }
 
@@ -1304,8 +1362,10 @@ function closeRateCard() {
   clearInterval(rateTimer)
   rateCountdown.value = 0
   rateCard.value = null
-  // 关闭后自动把光标聚焦回底部计算公式框
-  nextTick(() => { bottomInput.value?.focus() })
+  // 关闭后仅当焦点不在行内编辑时，才把光标聚焦回底部公式框（避免抢走正在编辑的焦点）
+  const ae = document.activeElement
+  const inRow = ae && ae.closest && ae.closest('.calc-row')
+  if (!inRow) nextTick(() => { bottomInput.value?.focus() })
 }
 // 汇率数据源（免费、无需 key）：顺序尝试，第一个成功的即采用（容错切换）
 const RATE_SOURCES = [
@@ -1486,14 +1546,17 @@ onMounted(() => {
   try { guideOpen.value = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
-  // 关闭/刷新页面时把防抖中尚未落盘的数据立即写一次，避免丢最后几秒输入
   window.addEventListener('beforeunload', saveState)
+  // 初始化所有已存在行的 textarea 高度（兜底）
+  nextTick(autosizeAllExpr)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('beforeunload', saveState)
   clearInterval(rateTimer)
+  scrollTimers.forEach(t => clearTimeout(t))
+  scrollTimers.clear()
   if (saveTimer) clearTimeout(saveTimer)
   if (toastTimer) clearTimeout(toastTimer)
 })
@@ -1712,23 +1775,37 @@ body {
 }
 .calc-row.dragging { opacity: 0.45; }
 
-.row-main { display: flex; align-items: baseline; gap: 12px; }
+/* 行内 grid 布局：算式独占整行（占满宽度），结果固定在第二行右下角，互不抢宽度 */
+.row-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 8px; /* 行距 6px，结果与算式留出呼吸间距 */
+}
 .drag-handle {
-  cursor: grab; color: var(--muted); opacity: 0.35;
-  font-size: 14px; letter-spacing: -2px; user-select: none; align-self: center;
+  cursor: grab; color: var(--muted); opacity: 0.5;
+  font-size: 14px; letter-spacing: -2px; user-select: none;
+  display: inline-flex; align-items: center;
+  margin-right: 6px; vertical-align: middle;
 }
 .calc-row:hover .drag-handle { opacity: 0.8; }
 .drag-handle:active { cursor: grabbing; }
 
-.expr-wrap { position: relative; flex: 1; min-width: 0; }
-.expr-input {
-  width: 100%;
+.expr-wrap { position: relative; min-width: 0; }
+/* 行内算式框与底部公式框共享的等宽 textarea 样式 */
+.mono-textarea {
   border: none; background: transparent;
   font-size: 21px; font-weight: 600; color: var(--text);
-  padding: 4px 0; outline: none;
   font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
+  resize: none; outline: none;
+  line-height: 1.45;
+  /* 自动按内容高度（现代浏览器 Chrome 124+/Safari 18+）；旧浏览器由 JS autosizeExpr 兜底 */
+  field-sizing: content;
+  max-height: 180px;
+  overflow-y: auto;
 }
-.expr-input::placeholder { color: var(--muted); opacity: 0.7; }
+.mono-textarea::placeholder { color: var(--muted); opacity: 0.7; }
+.expr-input { display: block; width: 100%; padding: 4px 0; min-height: 32px; }
 
 /* 函数补全下拉 */
 .completion-list {
@@ -1750,11 +1827,13 @@ body {
 .completion-item:hover .completion-name, .completion-item.active .completion-name { color: var(--accent); }
 
 .result-block {
-  flex: 0 0 auto; max-width: 55%;
+  grid-column: 1 / -1; grid-row: 2;
+  justify-self: end; /* 第二行右下角 */
+  max-width: 100%;
   display: flex; align-items: baseline; gap: 6px;
   font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
   color: var(--result);
-  white-space: nowrap; overflow: hidden;
+  white-space: normal; overflow-wrap: anywhere;
 }
 .result-block.empty { opacity: 0; }
 .result-block.partial,
@@ -1783,7 +1862,9 @@ body {
 .eq-mark { color: var(--muted); font-size: 20px; font-weight: 400; }
 .result-value {
   font-size: 26px; font-weight: 700;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 长结果换行完整展示，不再单行截断 */
+  overflow: visible; text-overflow: clip; white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .row-note { margin-top: 6px; }
@@ -1802,6 +1883,7 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px;
 }
+.row-meta-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .line-time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .row-actions { display: flex; gap: 6px; opacity: 0; transition: opacity .12s; }
 .calc-row:hover .row-actions { opacity: 1; }
@@ -1824,14 +1906,10 @@ body {
 .input-row { display: flex; align-items: center; gap: 10px; }
 .quick-input {
   flex: 1;
-  border: none; background: transparent;
-  font-size: 21px; font-weight: 600; color: var(--text);
-  padding: 8px 0; outline: none;
-  font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
-  resize: none; overflow-y: auto;
-  max-height: 96px; line-height: 1.5;
+  padding: 8px 0;
+  /* 高度随内容增长（默认约 2 行，达上限才出现内部滚动） */
+  min-height: 56px;
 }
-.quick-input::placeholder { color: var(--muted); opacity: 0.7; }
 .quick-btn {
   width: 40px; height: 40px; border-radius: 10px;
   border: none; background: var(--accent); color: #fff;
@@ -2177,7 +2255,7 @@ body {
   .app-card { height: min(92vh, 720px); max-height: 95vh; border-radius: 18px; }
   .result-value { font-size: 20px; }
   .expr-input, .quick-input { font-size: 18px; }
-  .row-main { flex-direction: column; align-items: flex-start; gap: 6px; }
-  .result-block { max-width: 100%; }
+  .row-main { gap: 4px 6px; }
+  .result-block { grid-column: 1 / -1; }
 }
 </style>
