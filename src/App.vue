@@ -436,7 +436,7 @@
                 ① <b>汇率</b>：1 美元 = 多少人民币；<br />
                 ② <b>更新时间</b>：数据最后更新时间；<br />
                 ③ <b>下次更新</b>：预计下次更新时间；<br />
-                ④ <b>数据来源</b>：open.er-api.com（取各大央行参考汇率，每日更新，非实时盘面报价）。<br />
+                ④ <b>数据来源</b>：多数据源自动切换——open.er-api.com（主）→ ECB 欧洲央行（frankfurter.app）→ exchangerate-api.com，任一源成功即采用，卡片会标注实际来源。<br />
                 实际结汇请以银行实时牌价为准。
               </div>
             </div>
@@ -893,10 +893,17 @@ function onRowFocus(idx) {
   ensureRowVisible(idx)
 }
 
-// 点击行任意区域（输入框/按钮/补全列表除外）自动聚焦到当前行：点公式区聚焦算式，点备注区聚焦备注
+// 仅选中（高亮）当前行，不聚焦输入框、不滚动：用于点击行内按钮等交互
+function selectRow(idx) {
+  focusedLine.value = idx
+  if (idx !== latestLineIdx.value) latestLineIdx.value = -1
+}
+
+// 点击行任意区域：输入框交给原生聚焦；按钮仅选中高亮不抢焦点；其余区域聚焦算式/备注
 function onRowClick(idx, e) {
   const t = e.target
-  if (t.closest('input, button, .completion-list')) return
+  if (t.closest('input, .completion-list')) return
+  if (t.closest('button')) { selectRow(idx); return } // 复制/删除等按钮：行选中效果
   if (t.closest('.row-note')) focusNote(idx)
   else focusExpr(idx)
 }
@@ -1037,8 +1044,11 @@ function applyCompletion(ci) {
 }
 
 // ---------- 行操作 ----------
-function delLine(idx) {
+async function delLine(idx) {
+  selectRow(idx) // 点删除时当前行先呈选中高亮
   const only = currentSheet.value.lines.length <= 1
+  const ok = await askConfirm(only ? '确定清空这一行？' : '确定删除这一行？')
+  if (!ok) return
   pushUndo()
   if (!only) {
     currentSheet.value.lines.splice(idx, 1)
@@ -1160,6 +1170,7 @@ function lineFullText(line) {
 }
 
 function openCopyMenu(lIdx, e) {
+  selectRow(lIdx) // 点复制时当前行先呈选中高亮
   const line = currentSheet.value.lines[lIdx]
   copyMenu.value = {
     lIdx,
@@ -1301,26 +1312,68 @@ function closeRateCard() {
   // 关闭后自动把光标聚焦回底部计算公式框
   nextTick(() => { bottomInput.value?.focus() })
 }
+// 汇率数据源（免费、无需 key）：顺序尝试，第一个成功的即采用（容错切换）
+const RATE_SOURCES = [
+  {
+    name: 'open.er-api.com',
+    get: async () => {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(6000) })
+      if (!res.ok) throw new Error('fail')
+      const d = await res.json()
+      const cny = d.rates?.CNY
+      if (!cny) throw new Error('no cny')
+      return { rate: Number(cny).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
+    }
+  },
+  {
+    name: 'ECB 欧洲央行',
+    get: async () => {
+      const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=CNY', { signal: AbortSignal.timeout(6000) })
+      if (!res.ok) throw new Error('fail')
+      const d = await res.json()
+      const cny = d.rates?.CNY
+      if (!cny) throw new Error('no cny')
+      // ECB 只给数据日期，用日期 + 次日推"更新时间/下次更新"
+      const date = d.date ? new Date(d.date + 'T00:00:00Z') : null
+      return {
+        rate: Number(cny).toFixed(6),
+        time: date ? date.toISOString() : '',
+        nextUpdate: date ? new Date(date.getTime() + 24 * 3600 * 1000).toISOString() : ''
+      }
+    }
+  },
+  {
+    name: 'exchangerate-api.com',
+    get: async () => {
+      const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { signal: AbortSignal.timeout(6000) })
+      if (!res.ok) throw new Error('fail')
+      const d = await res.json()
+      const cny = d.rates?.CNY
+      if (!cny) throw new Error('no cny')
+      return { rate: Number(cny).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
+    }
+  }
+]
+// 顺序尝试所有源，任一成功即返回 { source, rate, time, nextUpdate }；全部失败抛错
+async function fetchRateSources() {
+  for (const s of RATE_SOURCES) {
+    try {
+      const data = await s.get()
+      return { source: s.name, ...data }
+    } catch (e) { /* 换下一个源 */ }
+  }
+  throw new Error('all sources failed')
+}
+
 async function fetchRateToInput() {
   if (rateLoading.value) return
   rateLoading.value = true
   try {
-    const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(8000) })
-    if (!res.ok) throw new Error('fail')
-    const data = await res.json()
-    const cny = data.rates?.CNY
-    if (!cny) throw new Error('no cny')
-    const val = Number(cny).toFixed(6)
+    const data = await fetchRateSources()
     // 自动填入底部公式框（沿用原行为）
-    fillRateToFormula(val)
-    // 弹出说明卡片，把“1 美元 = 多少人民币、数据哪来、何时更新、何时失效”讲清楚
-    rateCard.value = {
-      rate: val,
-      time: data.time_last_update_utc || '',
-      nextUpdate: data.time_next_update_utc || '',
-      source: 'open.er-api.com',
-      filled: true
-    }
+    fillRateToFormula(data.rate)
+    // 弹出说明卡片，标注实际采用的数据源
+    rateCard.value = { rate: data.rate, time: data.time, nextUpdate: data.nextUpdate, source: data.source, filled: true }
     startRateCountdown()
   } catch (e) {
     toast('获取汇率失败，请检查网络', { type: 'error', action: { label: '重试', run: () => fetchRateToInput() } })
@@ -1381,6 +1434,14 @@ function onGlobalKeydown(e) {
   }
 }
 
+// 点击行外（含工具栏/空白/底部框）自动取消"选中行"高亮；
+// 行内、行内浮层（复制菜单/错误浮层）上的点击不清除
+function onDocClick(e) {
+  if (e.target.closest('.calc-row, .popover')) return
+  focusedLine.value = -1
+  latestLineIdx.value = -1 // 底部添加行产生的"最新计算行"高亮也一并取消
+}
+
 // ---------- 持久化 ----------
 function saveState() {
   const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value }
@@ -1425,11 +1486,13 @@ onMounted(async () => {
   try { guideOpen.value = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
   rebuildScope()
   window.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('click', onDocClick)
   // 关闭/刷新页面时把防抖中尚未落盘的数据立即写一次，避免丢最后几秒输入
   window.addEventListener('beforeunload', saveState)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('click', onDocClick)
   window.removeEventListener('beforeunload', saveState)
   clearInterval(rateTimer)
   if (saveTimer) clearTimeout(saveTimer)
