@@ -517,8 +517,9 @@ function uid() {
 }
 
 // ---------- 数据 ----------
+// 稿纸默认 0 行（不预留空行），所有行由用户操作（底部回车/载入示例等）产生
 const sheets = ref([
-  { id: uid(), name: '稿纸1', vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] }
+  { id: uid(), name: '稿纸1', vars: {}, lines: [] }
 ])
 const activeSheetIndex = ref(0)
 const theme = ref('light')
@@ -1046,24 +1047,19 @@ function applyCompletion(ci) {
 // ---------- 行操作 ----------
 async function delLine(idx) {
   selectRow(idx) // 点删除时当前行先呈选中高亮
-  const only = currentSheet.value.lines.length <= 1
-  const ok = await askConfirm(only ? '确定清空这一行？' : '确定删除这一行？')
+  const isLast = currentSheet.value.lines.length <= 1
+  // 删掉最后一行也是真删（不再保留空行占位），用"确认清空"文案
+  const ok = await askConfirm(isLast ? '确定清空这一行？' : '确定删除这一行？')
   if (!ok) return
   pushUndo()
-  if (!only) {
-    currentSheet.value.lines.splice(idx, 1)
-    // 修正高亮索引：删的是高亮行则清除，删在其上方则索引前移
-    if (focusedLine.value === idx) focusedLine.value = -1
-    else if (focusedLine.value > idx) focusedLine.value--
-    if (latestLineIdx.value === idx) latestLineIdx.value = -1
-    else if (latestLineIdx.value > idx) latestLineIdx.value--
-  } else {
-    currentSheet.value.lines[0] = { id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }
-    focusedLine.value = -1
-    latestLineIdx.value = -1
-  }
+  // 不论是否最后一行，统一 splice 真正删除；0 行时由引导卡填补
+  currentSheet.value.lines.splice(idx, 1)
+  if (focusedLine.value === idx) focusedLine.value = -1
+  else if (focusedLine.value > idx) focusedLine.value--
+  if (latestLineIdx.value === idx) latestLineIdx.value = -1
+  else if (latestLineIdx.value > idx) latestLineIdx.value--
   rebuildSheetScope(currentSheet.value)
-  toast(only ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
+  toast(isLast ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
 function addFromBottom() {
@@ -1231,7 +1227,7 @@ async function copyText(text) {
 }
 // ---------- 稿纸操作 ----------
 function addSheet() {
-  sheets.value.push({ id: uid(), name: `稿纸${sheets.value.length + 1}`, vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] })
+  sheets.value.push({ id: uid(), name: `稿纸${sheets.value.length + 1}`, vars: {}, lines: [] })
   activeSheetIndex.value = sheets.value.length - 1
 }
 function switchSheet(idx) {
@@ -1275,7 +1271,7 @@ async function clearSheet() {
   const ok = await askConfirm(`清空「${currentSheet.value.name}」的所有算式？`)
   if (!ok) return
   pushUndo()
-  currentSheet.value.lines = [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }]
+  currentSheet.value.lines = []
   currentSheet.value.vars = {}
   focusedLine.value = -1
   latestLineIdx.value = -1
@@ -1285,7 +1281,7 @@ async function clearAllSheets() {
   const ok = await askConfirm('确定清空所有稿纸？清空后可通过撤销恢复。')
   if (!ok) return
   pushUndo()
-  sheets.value = [{ id: uid(), name: '稿纸1', vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] }]
+  sheets.value = [{ id: uid(), name: '稿纸1', vars: {}, lines: [] }]
   activeSheetIndex.value = 0
   focusedLine.value = -1
   latestLineIdx.value = -1
@@ -1593,7 +1589,9 @@ body {
   background: var(--bg);
 }
 .app-card {
-  width: 100%; max-width: 920px; max-height: 90vh;
+  width: 100%; max-width: 1100px;
+  /* 固定高度（类似一张纸），行少/空稿纸时不塌缩，内部滚动区负责内容伸缩 */
+  height: min(88vh, 860px); max-height: 90vh;
   background: var(--card);
   border-radius: 24px;
   box-shadow: var(--card-shadow);
@@ -2177,7 +2175,7 @@ body {
 /* 响应式 */
 @media (max-width: 640px) {
   .app-wrapper { padding: 12px; }
-  .app-card { max-height: 95vh; border-radius: 18px; }
+  .app-card { height: min(92vh, 720px); max-height: 95vh; border-radius: 18px; }
   .result-value { font-size: 20px; }
   .expr-input, .quick-input { font-size: 18px; }
   .row-main { flex-direction: column; align-items: flex-start; gap: 6px; }
