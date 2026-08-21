@@ -2062,8 +2062,11 @@ body {
 .rate-btn-single:active { transform: scale(.97); }
 
 /* 行增删动画 */
-.row-enter-active, .row-leave-active { transition: all .35s cubic-bezier(.22,1,.36,1); overflow: hidden; }
-.row-enter-from { opacity: 0; transform: translateY(14px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+/* 进入：只过渡合成属性（opacity/transform），高度立即就位，零重排；
+   离开：行已 absolute 脱离文档流，保留 max-height 收缩动画不影响下方行重排 */
+.row-enter-active { transition: opacity .35s cubic-bezier(.22,1,.36,1), transform .35s cubic-bezier(.22,1,.36,1); }
+.row-leave-active { transition: all .35s cubic-bezier(.22,1,.36,1); overflow: hidden; }
+.row-enter-from { opacity: 0; transform: translateY(14px) scale(.98); }
 .row-leave-to { opacity: 0; transform: translateY(-8px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
 .row-leave-active { position: absolute; left: 16px; right: 16px; margin-bottom: 0; }
 /* 结果出现/变化动画 */
