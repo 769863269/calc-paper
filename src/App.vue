@@ -831,6 +831,10 @@ function onExprInput(idx) {
   const sh = currentSheet.value
   if (!sh.vars) sh.vars = {}
   computeLine(sh.lines[idx], sh.vars)
+  // 级联重算：赋值行改动会影响后续引用变量的行；静默重算其后所有行（不触发动画，避免每键闪烁）
+  for (let i = idx + 1; i < sh.lines.length; i++) {
+    computeLine(sh.lines[i], sh.vars, false)
+  }
   checkCompletion(idx)
 }
 
@@ -940,7 +944,7 @@ function focusPrevRow(idx) {
 function focusNextRow(idx) {
   const lines = currentSheet.value.lines
   if (idx < lines.length - 1) focusExpr(idx + 1)
-  else nextTick(() => bottomInput.value?.focus())
+  else nextTick(() => bottomInput.value?.focus({ preventScroll: true }))
 }
 
 // 回车：有补全先补全，否则跳下一行
@@ -1012,7 +1016,10 @@ function applyCompletion(ci) {
   const item = matches[ci] || matches[completion.value.active]
   const full = item.name
   const next = input.value.slice(0, start) + full + input.value.slice(start + word.length)
-  currentSheet.value.lines[lIdx].expr = next
+  const sh = currentSheet.value
+  sh.lines[lIdx].expr = next
+  if (!sh.vars) sh.vars = {}
+  computeLine(sh.lines[lIdx], sh.vars) // 补全后立即重算，避免结果停留旧值
   completion.value = null
   nextTick(() => {
     input.focus()
@@ -1027,8 +1034,15 @@ function delLine(idx) {
   pushUndo()
   if (!only) {
     currentSheet.value.lines.splice(idx, 1)
+    // 修正高亮索引：删的是高亮行则清除，删在其上方则索引前移
+    if (focusedLine.value === idx) focusedLine.value = -1
+    else if (focusedLine.value > idx) focusedLine.value--
+    if (latestLineIdx.value === idx) latestLineIdx.value = -1
+    else if (latestLineIdx.value > idx) latestLineIdx.value--
   } else {
     currentSheet.value.lines[0] = { id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }
+    focusedLine.value = -1
+    latestLineIdx.value = -1
   }
   rebuildSheetScope(currentSheet.value)
   toast(only ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
@@ -1206,6 +1220,9 @@ function switchSheet(idx) {
   focusedLine.value = -1
   latestLineIdx.value = -1
   closeMenus()
+  completion.value = null
+  errPopover.value = { ...errPopover.value, show: false }
+  varTip.value = { ...varTip.value, show: false }
 }
 function startRename(idx) {
   editingIndex.value = idx
@@ -1246,7 +1263,7 @@ async function clearSheet() {
   toast('已清空当前稿纸', { type: 'success', action: { label: '撤销', run: undo } })
 }
 async function clearAllSheets() {
-  const ok = await askConfirm('确定清空所有稿纸？此操作不可恢复。')
+  const ok = await askConfirm('确定清空所有稿纸？清空后可通过撤销恢复。')
   if (!ok) return
   pushUndo()
   sheets.value = [{ id: uid(), name: '稿纸1', vars: {}, lines: [{ id: uid(), expr: '', result: '', note: '', time: '', errorMsg: '', partial: false }] }]
@@ -1344,6 +1361,10 @@ function onGlobalKeydown(e) {
     else if (e.key === 'Enter') { e.preventDefault(); confirmOk() }
     return
   }
+  if (e.key === 'Escape') {
+    if (helpOpen.value) { helpOpen.value = false; return }
+    if (rateCard.value) { closeRateCard(); return }
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     const tag = document.activeElement?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
@@ -1396,10 +1417,15 @@ onMounted(async () => {
   try { guideOpen.value = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
   rebuildScope()
   window.addEventListener('keydown', onGlobalKeydown)
+  // 关闭/刷新页面时把防抖中尚未落盘的数据立即写一次，避免丢最后几秒输入
+  window.addEventListener('beforeunload', saveState)
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
+  window.removeEventListener('beforeunload', saveState)
   clearInterval(rateTimer)
+  if (saveTimer) clearTimeout(saveTimer)
+  if (toastTimer) clearTimeout(toastTimer)
 })
 
 // 变量值悬浮提示（算式中引用已定义变量时，hover 显示当前值）
