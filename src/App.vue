@@ -1461,30 +1461,34 @@ function scheduleSave() {
 watch([sheets, activeSheetIndex, theme], scheduleSave, { deep: true })
 
 // ---------- 启动 ----------
-onMounted(async () => {
-  const saved = await loadState()
-  if (saved) {
-    if (Array.isArray(saved.sheets) && saved.sheets.length) {
-      sheets.value = saved.sheets.map(sh => ({
-        id: sh.id || uid(),
-        name: sh.name || '稿纸',
-        vars: {},
-        lines: (sh.lines || []).map(l => ({
-          id: l.id || uid(),
-          expr: l.expr || '',
-          result: l.result || '',
-          note: l.note || '',
-          time: l.time || (l.result ? nowTime() : ''),
-          errorMsg: l.errorMsg || '',
-          partial: !!l.partial
-        }))
+// 同步加载本地数据：首帧即渲染真实数据（localStorage 读取是同步的）。
+// 若放在 onMounted 异步执行，首帧先渲染默认空行、数据到达后再替换，
+// transition-group 会把已有行当作"新插入"播放进入动画 → 刷新时整批行跳动闪烁。
+const saved = loadState()
+if (saved) {
+  if (Array.isArray(saved.sheets) && saved.sheets.length) {
+    sheets.value = saved.sheets.map(sh => ({
+      id: sh.id || uid(),
+      name: sh.name || '稿纸',
+      vars: {},
+      lines: (sh.lines || []).map(l => ({
+        id: l.id || uid(),
+        expr: l.expr || '',
+        result: l.result || '',
+        note: l.note || '',
+        time: l.time || (l.result ? nowTime() : ''),
+        errorMsg: l.errorMsg || '',
+        partial: !!l.partial
       }))
-    }
-    if (typeof saved.activeSheetIndex === 'number') activeSheetIndex.value = saved.activeSheetIndex
-    if (saved.theme === 'dark' || saved.theme === 'light') theme.value = saved.theme
+    }))
   }
+  if (typeof saved.activeSheetIndex === 'number') activeSheetIndex.value = saved.activeSheetIndex
+  if (saved.theme === 'dark' || saved.theme === 'light') theme.value = saved.theme
+}
+// 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
+rebuildScope()
+onMounted(() => {
   try { guideOpen.value = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
-  rebuildScope()
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   // 关闭/刷新页面时把防抖中尚未落盘的数据立即写一次，避免丢最后几秒输入
