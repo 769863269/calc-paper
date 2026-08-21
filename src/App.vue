@@ -597,9 +597,13 @@ const helpOpen = ref(false)
 // 撤销栈
 const undoStack = ref([])
 const MAX_UNDO = 50
+const MAX_SNAP_SIZE = 2 * 1024 * 1024 // 单份快照超 2MB 不压栈，防超大稿纸内存暴涨
 function pushUndo() {
   try {
-    undoStack.value.push(JSON.stringify({ sheets: sheets.value, activeSheetIndex: activeSheetIndex.value }))
+    const snap = JSON.stringify({ sheets: sheets.value, activeSheetIndex: activeSheetIndex.value })
+    // 单份快照超过上限（超大稿纸）不压栈，避免内存暴涨
+    if (snap.length > MAX_SNAP_SIZE) return
+    undoStack.value.push(snap)
     if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
   } catch (e) {}
 }
@@ -830,10 +834,14 @@ function rebuildScope() {
 function onExprInput(idx) {
   const sh = currentSheet.value
   if (!sh.vars) sh.vars = {}
+  const varsBefore = JSON.stringify(sh.vars)
   computeLine(sh.lines[idx], sh.vars)
-  // 级联重算：赋值行改动会影响后续引用变量的行；静默重算其后所有行（不触发动画，避免每键闪烁）
-  for (let i = idx + 1; i < sh.lines.length; i++) {
-    computeLine(sh.lines[i], sh.vars, false)
+  // 级联重算：仅当本次编辑改变了变量（赋值行增删/改值）才重算后续行；
+  // 普通算式行编辑不触发，避免每敲一键 O(n) 全量重算
+  if (JSON.stringify(sh.vars) !== varsBefore) {
+    for (let i = idx + 1; i < sh.lines.length; i++) {
+      computeLine(sh.lines[i], sh.vars, false)
+    }
   }
   checkCompletion(idx)
 }
