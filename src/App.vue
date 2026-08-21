@@ -79,7 +79,6 @@
             :class="{ focused: focusedLine === lIdx, latest: latestLineIdx === lIdx, dragging: dragIndex === lIdx, pulse: line.pulse, shake: line.shake, 'drop-above': dropTarget.idx === lIdx && dropTarget.pos === 'above', 'drop-below': dropTarget.idx === lIdx && dropTarget.pos === 'below' }"
             :data-id="line.id"
             :ref="(el) => setRowRef(el, line.id)"
-            draggable="true"
             @click="onRowClick(lIdx, $event)"
             @dragstart="onDragStart($event, lIdx)"
             @dragover.prevent="onDragOver($event, lIdx)"
@@ -87,7 +86,7 @@
             @dragend="onDragEnd"
           >
             <div class="row-main">
-              <span class="drag-handle" v-tip="'拖动排序'">⋮⋮</span>
+              <span class="drag-handle" v-tip="'拖动排序'" draggable="true">⋮⋮</span>
               <div class="expr-wrap" @mouseenter="onExprHover(lIdx, $event)" @mouseleave="hideVarTip">
                 <input
                   :ref="(el) => setExprRef(el, lIdx)"
