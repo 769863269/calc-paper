@@ -70,6 +70,12 @@
             <button class="modal-btn" @click="dismissGuide">开始使用</button>
           </div>
         </div>
+        <!-- 空稿纸轻提示（非首次：新增稿纸/清空后不再弹大卡，给个不碍事的入口） -->
+        <div v-else-if="isSheetEmpty" class="empty-hint">
+          <div class="empty-hint-title">空白稿纸</div>
+          <div class="empty-hint-sub">在下方输入算式，回车即可计算；也可以先载入示例看看效果</div>
+          <button class="modal-btn primary" @click="loadExample">载入示例</button>
+        </div>
 
         <transition-group name="row" tag="div" class="calc-list">
           <div
@@ -1742,6 +1748,18 @@ body {
   font-family: "SF Mono", Consolas, monospace; font-size: 12px;
 }
 .guide-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; }
+
+/* 空稿纸轻提示：非首次场景（新增稿纸/清空后），比首次引导卡更收敛 */
+.empty-hint {
+  margin: 22px 16px;
+  padding: 22px 20px;
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  background: var(--row-hover);
+  text-align: center;
+}
+.empty-hint-title { font-size: 14px; font-weight: 600; color: var(--muted); }
+.empty-hint-sub { font-size: 12px; color: var(--muted); opacity: 0.85; margin: 6px 0 14px; line-height: 1.6; }
 
 .calc-row {
   position: relative;
