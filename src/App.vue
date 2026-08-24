@@ -779,12 +779,13 @@ function computeLine(line, scope, animate = true) {
     line.result = ''; line.partial = false; line.errorMsg = ''
     applyAnim(line, prevResult, prevError, animate); return
   }
+  // 只要行内有内容（无论对错）就标记首次尝试时间；空行不标记
+  if (!line.time) line.time = nowTime()
   const full = safeEval(trimmed, scope)
   if (full.ok) {
     line.result = full.value
     line.partial = false
     line.errorMsg = ''
-    if (!line.time) line.time = nowTime()
     applyAnim(line, prevResult, prevError, animate); return
   }
   const open = (trimmed.match(/\(/g) || []).length
