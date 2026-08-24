@@ -82,7 +82,7 @@
             v-for="(line, lIdx) in currentSheet.lines"
             :key="line.id"
             class="calc-row"
-            :class="{ focused: focusedLine === lIdx, latest: latestLineIdx === lIdx, dragging: dragIndex === lIdx, pulse: line.pulse, shake: line.shake, 'drop-above': dropTarget.idx === lIdx && dropTarget.pos === 'above', 'drop-below': dropTarget.idx === lIdx && dropTarget.pos === 'below' }"
+            :class="{ focused: focusedLine === lIdx, latest: latestLineIdx === lIdx, dragging: dragState.from === lIdx, pulse: line.pulse, shake: line.shake, 'drop-above': dragState.to === lIdx && dragState.pos === 'above', 'drop-below': dragState.to === lIdx && dragState.pos === 'below' }"
             :data-id="line.id"
             :ref="(el) => setRowRef(el, line.id)"
             @click="onRowClick(lIdx, $event)"
@@ -97,6 +97,7 @@
                   :ref="(el) => setExprRef(el, lIdx)"
                   v-model="line.expr"
                   @input="onExprInput(lIdx)"
+                  @paste="onExprPaste(lIdx, $event)"
                   @keydown.enter.prevent="onExprEnter(lIdx)"
                   @keydown.tab.prevent="onExprTab(lIdx)"
                   @keydown.up="onExprUp(lIdx, $event)"
@@ -104,7 +105,7 @@
                   @focus="onRowFocus(lIdx)"
                   @blur="onExprBlur(lIdx)"
                   class="expr-input mono-textarea"
-                  placeholder="计算公式（回车跳下一行）"
+                  placeholder="计算公式（回车跳下一行，粘贴多行自动拆分）"
                   spellcheck="false"
                   rows="1"
                 ></textarea>
@@ -122,7 +123,7 @@
                   </div>
                 </div>
               </div>
-              <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }">
+              <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }" v-tip="line.expr.trim() ? '算式：' + line.expr : null">
                 <span class="eq-mark">=</span>
                 <span class="result-value">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
                 <span v-if="line.partial" class="partial-hint" :title="line.errorMsg">表达式不完整</span>
@@ -586,8 +587,10 @@ const vTip = {
   }
 }
 
-// 引导
-const guideOpen = ref(true)
+// 引导：初始化时同步从 localStorage 读（避免首屏大卡一闪再消失）
+let _guideInit = true
+try { _guideInit = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
+const guideOpen = ref(_guideInit)
 function dismissGuide() {
   guideOpen.value = false
   try { localStorage.setItem('calc_paper_guide_dismissed', '1') } catch (e) {}
@@ -609,14 +612,38 @@ function loadExample() {
 // 帮助
 const helpOpen = ref(false)
 
-// 撤销栈
+// 撤销栈（恢复完整 UI 状态：稿纸数据 + 底部输入框内容 + 当前焦点行 + 最新计算行）
 const undoStack = ref([])
 const MAX_UNDO = 50
 const MAX_SNAP_SIZE = 2 * 1024 * 1024 // 单份快照超 2MB 不压栈，防超大稿纸内存暴涨
+function snapshot() {
+  return {
+    sheets: sheets.value,
+    activeSheetIndex: activeSheetIndex.value,
+    quickExpr: quickExpr.value,
+    focusedLine: focusedLine.value,
+    latestLineIdx: latestLineIdx.value
+  }
+}
+function applySnapshot(snap) {
+  sheets.value = snap.sheets
+  activeSheetIndex.value = snap.activeSheetIndex
+  quickExpr.value = snap.quickExpr
+  rebuildScope()
+  // 索引越界保护：被删行/切换稿纸后，原索引可能失效
+  const len = currentSheet.value.lines.length
+  focusedLine.value = snap.focusedLine >= 0 && snap.focusedLine < len ? snap.focusedLine : -1
+  latestLineIdx.value = snap.latestLineIdx >= 0 && snap.latestLineIdx < len ? snap.latestLineIdx : -1
+  // 浮层状态一并清掉（可能挂在已删行上）
+  closeMenus()
+  errPopover.value = { ...errPopover.value, show: false }
+  varTip.value = { ...varTip.value, show: false }
+  completion.value = null
+  editingIndex.value = -1
+}
 function pushUndo() {
   try {
-    const snap = JSON.stringify({ sheets: sheets.value, activeSheetIndex: activeSheetIndex.value })
-    // 单份快照超过上限（超大稿纸）不压栈，避免内存暴涨
+    const snap = JSON.stringify(snapshot())
     if (snap.length > MAX_SNAP_SIZE) return
     undoStack.value.push(snap)
     if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
@@ -624,11 +651,7 @@ function pushUndo() {
 }
 function undo() {
   if (!undoStack.value.length) { toast('没有可撤销的操作'); return }
-  const snap = JSON.parse(undoStack.value.pop())
-  sheets.value = snap.sheets
-  activeSheetIndex.value = snap.activeSheetIndex
-  focusedLine.value = -1
-  rebuildScope()
+  applySnapshot(JSON.parse(undoStack.value.pop()))
   toast('已撤销')
 }
 
@@ -666,12 +689,13 @@ function runToastAction() {
 
 // ---------- 计算与格式化 ----------
 // 去掉数字字符串尾部的无效 0（含科学计数法小数部分）
+const TRAILING_ZEROS = /(\.\d*?)0+$/
 function trimZeros(s) {
   if (s.includes('e')) {
     const [m, exp] = s.split('e')
-    return m.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') + 'e' + exp
+    return m.replace(TRAILING_ZEROS, '$1').replace(/\.$/, '') + 'e' + exp
   }
-  return s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+  return s.replace(TRAILING_ZEROS, '$1').replace(/\.$/, '')
 }
 
 function formatResult(res) {
@@ -682,13 +706,18 @@ function formatResult(res) {
       if (res.isInteger()) return res.toFixed(0)
       // 完整十进制（decimal.js 64 位有效数字，有限小数可精确表示）
       const full = res.toString()
+      // 小数部分 > 12 位：商业精度截断到 12 位（数学上必然截断，远超日常精度需求；避免 1/3 输出 64 位字符挤爆 UI）
+      const decIdx = full.indexOf('.')
+      if (decIdx >= 0 && full.length - decIdx - 1 > 12) {
+        const f = trimZeros(math.format(res, { notation: 'fixed', precision: 12 }))
+        // fixed 变成 0（极小值）时保留指数形式，避免误显示为 0
+        if (f === '0' || f === '-0') return full
+        return f
+      }
       // 有限且长度适中 → 完整显示，零偏差
       if (!full.includes('e') && full.length <= 32) return trimZeros(full)
-      // 无限小数 / 超长：fixed 16 位小数（数学上必然截断，商业精度远超需求）
-      const f = trimZeros(math.format(res, { notation: 'fixed', precision: 16 }))
-      // fixed 变成 0（极小值）时保留指数形式，避免误显示为 0
-      if (f === '0' || f === '-0') return full
-      return f
+      // 罕见大数（>32 位整数部分）：用指数形式
+      return trimZeros(math.format(res, { notation: 'exponential', precision: 12 }))
     }
     return math.format(res, { precision: 14 })
   } catch (e) { return String(res) }
@@ -863,6 +892,52 @@ function onExprInput(idx) {
   autosizeExpr(exprRefs[idx]) // 兜底：textarea 按内容自适应高度
 }
 
+// 行内粘贴：含 \n 时按行拆分到后续新行（与底部框行为一致）
+function onExprPaste(idx, e) {
+  const text = (e.clipboardData || window.clipboardData)?.getData('text') || ''
+  if (!text.includes('\n')) return // 单行：交给默认行为
+  e.preventDefault()
+  const sh = currentSheet.value
+  if (!sh.vars) sh.vars = {}
+  const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+  if (!lines.length) return
+  pushUndo()
+  // 当前行：保留光标位置之前 + 粘贴首行；光标后内容追加到首行末尾
+  const ta = exprRefs[idx]
+  const start = ta?.selectionStart ?? sh.lines[idx].expr.length
+  const end = ta?.selectionEnd ?? start
+  const before = sh.lines[idx].expr.slice(0, start)
+  const after = sh.lines[idx].expr.slice(end)
+  const newRows = []
+  // 替换当前行为「前半 + 粘贴首行」
+  sh.lines[idx].expr = before + lines[0]
+  computeLine(sh.lines[idx], sh.vars)
+  // 后续行：第二行起每行一个新行，最后一行带 after
+  for (let i = 1; i < lines.length; i++) {
+    const isLast = i === lines.length - 1
+    const expr = lines[i] + (isLast ? after : '')
+    const line = { ...newLine(), expr }
+    sh.lines.splice(idx + newRows.length + 1, 0, line)
+    newRows.push(line)
+    computeLine(line, sh.vars)
+  }
+  rebuildSheetScope(sh)
+  // 焦点定位到最后一个新行末尾
+  const lastNewIdx = idx + newRows.length
+  focusedLine.value = lastNewIdx
+  latestLineIdx.value = lastNewIdx
+  nextTick(() => {
+    const el = exprRefs[lastNewIdx]
+    if (el) {
+      el.focus()
+      const pos = sh.lines[lastNewIdx].expr.length
+      el.setSelectionRange(pos, pos)
+      autosizeExpr(el)
+    }
+    if (lastNewIdx) locateRow(sh.lines[lastNewIdx].id)
+  })
+}
+
 // ---------- 焦点 / 行导航 ----------
 const exprRefs = []
 const noteRefs = []
@@ -1006,20 +1081,27 @@ function focusNextRow(idx) {
 function hasCompletion(idx) {
   return !!(completion.value && completion.value.lIdx === idx && completion.value.matches.length)
 }
+// 统一处理补全菜单的键盘行为：返回 true 表示已被补全"吃掉"
+function tryCompleteNavigate(idx, dir) {
+  if (!hasCompletion(idx)) return false
+  const c = completion.value
+  if (dir === 'enter' || dir === 'tab') {
+    applyCompletion(c.active)
+  } else if (dir === 'up') {
+    c.active = (c.active - 1 + c.matches.length) % c.matches.length
+  } else if (dir === 'down') {
+    c.active = (c.active + 1) % c.matches.length
+  }
+  return true
+}
 // 回车：有补全先补全，否则跳下一行
 function onExprEnter(idx) {
-  if (hasCompletion(idx)) {
-    applyCompletion(completion.value.active)
-    return
-  }
+  if (tryCompleteNavigate(idx, 'enter')) return
   focusNextRow(idx)
 }
 // Tab：有补全先补全，否则跳备注
 function onExprTab(idx) {
-  if (hasCompletion(idx)) {
-    applyCompletion(completion.value.active)
-    return
-  }
+  if (tryCompleteNavigate(idx, 'tab')) return
   focusNote(idx)
 }
 // ↑↓：补全下拉时切换候选；行内 textarea 内容多行（软换行也算）时交还默认光标移动，单行时才跳行
@@ -1028,23 +1110,13 @@ function isExprMultiLine(idx) {
   return !!el && el.scrollHeight > el.clientHeight + 2
 }
 function onExprUp(idx, e) {
-  if (hasCompletion(idx)) {
-    const m = completion.value.matches.length
-    completion.value.active = (completion.value.active - 1 + m) % m
-    e.preventDefault()
-    return
-  }
+  if (tryCompleteNavigate(idx, 'up')) { e.preventDefault(); return }
   if (isExprMultiLine(idx)) return // 多行：允许光标上移
   e.preventDefault()
   focusPrevRow(idx)
 }
 function onExprDown(idx, e) {
-  if (hasCompletion(idx)) {
-    const m = completion.value.matches.length
-    completion.value.active = (completion.value.active + 1) % m
-    e.preventDefault()
-    return
-  }
+  if (tryCompleteNavigate(idx, 'down')) { e.preventDefault(); return }
   if (isExprMultiLine(idx)) return // 多行：允许光标下移
   e.preventDefault()
   focusNextRow(idx)
@@ -1185,37 +1257,49 @@ function bottomUp() {
 }
 
 // ---------- 行拖拽排序 ----------
-const dragIndex = ref(-1)
-const dropTarget = ref({ idx: -1, pos: 'below' })
+const dragState = ref({ from: -1, to: -1, pos: 'below' })
 function onDragStart(e, fromIdx) {
-  dragIndex.value = fromIdx
+  dragState.value = { ...dragState.value, from: fromIdx }
   e.dataTransfer.effectAllowed = 'move'
   e.dataTransfer.setData('text/plain', String(fromIdx))
 }
 function onDragOver(e, idx) {
-  if (dragIndex.value === -1) return
+  if (dragState.value.from === -1) return
   const r = e.currentTarget.getBoundingClientRect()
   const pos = (e.clientY - r.top) < r.height / 2 ? 'above' : 'below'
   // 仅在插入位置变化时更新，避免 dragover 高频（每秒数十次）触发重渲染
-  if (dropTarget.value.idx !== idx || dropTarget.value.pos !== pos) {
-    dropTarget.value = { idx, pos }
+  if (dragState.value.to !== idx || dragState.value.pos !== pos) {
+    dragState.value = { ...dragState.value, to: idx, pos }
   }
 }
 function onDrop(e) {
   const from = Number(e.dataTransfer.getData('text/plain'))
-  if (Number.isNaN(from) || dropTarget.value.idx === -1) return
-  const target = dropTarget.value
+  if (Number.isNaN(from) || dragState.value.to === -1) return
+  const target = dragState.value
   const lines = currentSheet.value.lines
-  let insertAt = target.pos === 'above' ? target.idx : target.idx + 1
-  if (from === insertAt || from === insertAt - 1) { dropTarget.value = { idx: -1, pos: 'below' }; return }
+  let insertAt = target.pos === 'above' ? target.to : target.to + 1
+  if (from === insertAt || from === insertAt - 1) { resetDrag(); return }
+  pushUndo() // 拖拽重排也支持撤销（与其他改动一致）
   const [item] = lines.splice(from, 1)
   if (from < insertAt) insertAt--
   lines.splice(insertAt, 0, item)
+  // 焦点/最新行索引同步：被移动行的索引如果被追踪，移到新位置；其他行索引根据位移调整
+  const movedId = item.id
+  const newIdx = lines.findIndex(l => l.id === movedId)
+  const fixIdx = (ref) => {
+    if (ref.value < 0) return
+    if (ref.value === from) ref.value = newIdx
+    else if (from < ref.value && newIdx >= ref.value) ref.value--
+    else if (from > ref.value && newIdx <= ref.value) ref.value++
+  }
+  fixIdx(focusedLine)
+  fixIdx(latestLineIdx)
   rebuildSheetScope(currentSheet.value)
-  dropTarget.value = { idx: -1, pos: 'below' }
+  resetDrag()
   toast('已调整顺序', { type: 'success', action: { label: '撤销', run: undo } })
 }
-function onDragEnd() { dragIndex.value = -1; dropTarget.value = { idx: -1, pos: 'below' } }
+function onDragEnd() { resetDrag() }
+function resetDrag() { dragState.value = { from: -1, to: -1, pos: 'below' } }
 
 // ---------- 菜单（导出 / 备份 / 行复制） ----------
 const copyMenu = ref(null) // { lIdx }
@@ -1290,8 +1374,16 @@ async function copyText(text) {
   }
 }
 // ---------- 稿纸操作 ----------
+function uniqueSheetName(base) {
+  const used = new Set(sheets.value.map(s => s.name))
+  if (!used.has(base)) return base
+  let n = 2
+  while (used.has(`${base} (${n})`)) n++
+  return `${base} (${n})`
+}
 function addSheet() {
-  sheets.value.push({ id: uid(), name: `稿纸${sheets.value.length + 1}`, vars: {}, lines: [] })
+  const base = `稿纸${sheets.value.length + 1}`
+  sheets.value.push({ id: uid(), name: uniqueSheetName(base), vars: {}, lines: [] })
   activeSheetIndex.value = sheets.value.length - 1
 }
 function switchSheet(idx) {
@@ -1375,26 +1467,29 @@ function closeRateCard() {
   if (!inRow) nextTick(() => { bottomInput.value?.focus() })
 }
 // 汇率数据源（免费、无需 key）：顺序尝试，第一个成功的即采用（容错切换）
+async function getJson(url, timeout = 6000) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeout) })
+  if (!res.ok) throw new Error('fail')
+  return res.json()
+}
+function pickCny(d) {
+  const cny = d?.rates?.CNY
+  if (!cny) throw new Error('no cny')
+  return cny
+}
 const RATE_SOURCES = [
   {
     name: 'open.er-api.com',
-    get: async () => {
-      const res = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(6000) })
-      if (!res.ok) throw new Error('fail')
-      const d = await res.json()
-      const cny = d.rates?.CNY
-      if (!cny) throw new Error('no cny')
-      return { rate: Number(cny).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
+    async get() {
+      const d = await getJson('https://open.er-api.com/v6/latest/USD')
+      return { rate: Number(pickCny(d)).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
     }
   },
   {
     name: 'ECB 欧洲央行',
-    get: async () => {
-      const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=CNY', { signal: AbortSignal.timeout(6000) })
-      if (!res.ok) throw new Error('fail')
-      const d = await res.json()
-      const cny = d.rates?.CNY
-      if (!cny) throw new Error('no cny')
+    async get() {
+      const d = await getJson('https://api.frankfurter.app/latest?from=USD&to=CNY')
+      const cny = pickCny(d)
       // ECB 只给数据日期，用日期 + 次日推"更新时间/下次更新"
       const date = d.date ? new Date(d.date + 'T00:00:00Z') : null
       return {
@@ -1406,13 +1501,9 @@ const RATE_SOURCES = [
   },
   {
     name: 'exchangerate-api.com',
-    get: async () => {
-      const res = await fetch('https://api.exchangerate-api.com/v4/latest/USD', { signal: AbortSignal.timeout(6000) })
-      if (!res.ok) throw new Error('fail')
-      const d = await res.json()
-      const cny = d.rates?.CNY
-      if (!cny) throw new Error('no cny')
-      return { rate: Number(cny).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
+    async get() {
+      const d = await getJson('https://api.exchangerate-api.com/v4/latest/USD')
+      return { rate: Number(pickCny(d)).toFixed(6), time: d.time_last_update_utc || '', nextUpdate: d.time_next_update_utc || '' }
     }
   }
 ]
@@ -1527,7 +1618,7 @@ watch([sheets, activeSheetIndex, theme], scheduleSave, { deep: true })
 // 若放在 onMounted 异步执行，首帧先渲染默认空行、数据到达后再替换，
 // transition-group 会把已有行当作"新插入"播放进入动画 → 刷新时整批行跳动闪烁。
 const saved = loadState()
-if (saved) {
+  if (saved) {
   if (Array.isArray(saved.sheets) && saved.sheets.length) {
     sheets.value = saved.sheets.map(sh => ({
       id: sh.id || uid(),
@@ -1540,7 +1631,9 @@ if (saved) {
         note: l.note || '',
         time: l.time || (l.result ? nowTime() : ''),
         errorMsg: l.errorMsg || '',
-        partial: !!l.partial
+        partial: !!l.partial,
+        pulse: false,
+        shake: false
       }))
     }))
   }
@@ -1550,7 +1643,6 @@ if (saved) {
 // 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
 rebuildScope()
 onMounted(() => {
-  try { guideOpen.value = !localStorage.getItem('calc_paper_guide_dismissed') } catch (e) {}
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   window.addEventListener('beforeunload', saveState)
@@ -1570,7 +1662,8 @@ onUnmounted(() => {
 
 // 变量值悬浮提示（算式中引用已定义变量时，hover 显示当前值）
 const varTip = ref({ show: false, idx: -1, vars: [], pos: {} })
-function onExprHover(lIdx, e) {
+let varTipTimer = null
+function showVarTip(lIdx, e) {
   const sh = currentSheet.value
   const vars = sh.vars || {}
   const line = sh.lines[lIdx]
@@ -1584,14 +1677,22 @@ function onExprHover(lIdx, e) {
     seen.add(name)
     list.push({ name, value: displayResult(String(vars[name])) })
   }
-  if (!list.length) { varTip.value = { ...varTip.value, show: false }; return }
+  if (!list.length) { hideVarTip(); return }
   const r = e.currentTarget.getBoundingClientRect()
   varTip.value = {
     show: true, idx: lIdx, vars: list,
     pos: { left: `${r.left}px`, top: `${r.bottom + 6}px` }
   }
 }
-function hideVarTip() { varTip.value = { ...varTip.value, show: false } }
+function onExprHover(lIdx, e) {
+  // 防抖：快速划过整列行时不重复跑正则+遍历
+  if (varTipTimer) clearTimeout(varTipTimer)
+  varTipTimer = setTimeout(() => { showVarTip(lIdx, e) }, 80)
+}
+function hideVarTip() {
+  if (varTipTimer) { clearTimeout(varTipTimer); varTipTimer = null }
+  varTip.value = { ...varTip.value, show: false }
+}
 </script>
 
 <style>
