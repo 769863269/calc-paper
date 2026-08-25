@@ -1175,8 +1175,9 @@ function laterScroll(fn, ms) {
   return t
 }
 // 把最新行滚动到底部可见区：直接操作滚动容器 paperBody。
-// 行的进入动画约 350ms（max-height 从 0 展开），必须等它结束后再滚，否则布局未稳定会差一点；
-// 这里手动计算目标 scrollTop：让行底边比可视区底边高 GAP 像素（留呼吸间距），而不是死板对齐容器底边。
+// 行的进入动画是 opacity+transform（不影响布局），行高在插入后即刻确定，无需等差 350ms；
+// 这里手动计算目标 scrollTop：让行底边比可视区底边高 GAP 像素（留呼吸间距）。
+// 用 rAF 等一帧让布局落定后立即平滑滚动，与淡入同步，避免"先蹦出再滚动"的割裂感。
 function locateRow(id) {
   const container = paperBody.value
   if (!container) return
@@ -1192,19 +1193,17 @@ function locateRow(id) {
     }
     return Math.max(0, container.scrollHeight - container.clientHeight)
   }
-  const goBottom = () => {
+  requestAnimationFrame(() => {
     const t = targetTop()
     container.scrollTo({ top: t, behavior: 'smooth' })
-    // 平滑滚动结束后再算一次目标位置；若仍差一点，瞬时强制到位
+    // 兜底校正：布局已稳定，通常无需校正；仅在极差情况下补位（用差值判定，避免无谓跳动）
     laterScroll(() => {
       const t2 = targetTop()
-      if (container.scrollTop < t2 - 1) {
+      if (Math.abs(container.scrollTop - t2) > 1) {
         container.scrollTo({ top: t2, behavior: 'auto' })
       }
-    }, 480)
-  }
-  // 等进入动画（约 350ms）结束后再开始滚动定位
-  laterScroll(goBottom, 420)
+    }, 420)
+  })
 }
 
 // 行内输入框获得焦点：高亮当前行，并取消"最新计算行"高亮，避免两个高亮并存
@@ -2332,7 +2331,12 @@ body {
 
 
 .paper-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.paper-body { flex: 1; overflow-y: auto; padding: 10px 0 16px; }
+.paper-body { flex: 1; overflow-y: auto; padding: 10px 0 16px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; }
+/* 细滚动条常驻：避免溢出时滚动条"突然冒出"造成整体横移的卡顿感 */
+.paper-body::-webkit-scrollbar { width: 8px; }
+.paper-body::-webkit-scrollbar-track { background: transparent; }
+.paper-body::-webkit-scrollbar-thumb { background: rgba(128,128,128,.45); border-radius: 4px; }
+.paper-body::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,.7); }
 /* 稿纸样式：横格 / 方格（白纸为默认纯色，无背景纹） */
 .paper-body.paper-ruled {
   background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 31px, var(--rule) 31px, var(--rule) 32px);
