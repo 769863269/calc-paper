@@ -307,7 +307,41 @@
 
         <!-- 导出菜单点击外部关闭遮罩 -->
         <div v-if="exportMenuOpen || styleMenuOpen" class="popover-mask" @click="exportMenuOpen = false; styleMenuOpen = false"></div>
+
       </footer>
+
+      <!-- 变量面板：遮罩 + 右侧滑入 -->
+      <div v-if="varPanelOpen" class="var-mask" @click="varPanelOpen = false"></div>
+      <transition name="slide-right">
+        <aside v-if="varPanelOpen" class="var-panel" @click.stop>
+          <div class="var-panel-head">
+            <div>
+              <span class="var-panel-title">变量面板</span>
+              <span class="var-panel-sub">所有稿纸共享 · 改值即重算</span>
+            </div>
+            <button class="var-panel-close" @click="varPanelOpen = false" aria-label="关闭">×</button>
+          </div>
+          <div class="var-panel-body">
+            <p class="var-panel-hint" v-if="!varEntries.length">还没有变量。<br/>在任意稿纸里用 <code>name = 值</code> 定义，例如 <code>tax = 0.13</code>，所有稿纸共享。</p>
+            <div v-for="v in varEntries" :key="v.name" class="var-row">
+              <span class="var-name">{{ v.name }}</span>
+              <span class="var-eq">=</span>
+              <input
+                class="var-input"
+                :value="varDrafts[v.name] ?? v.raw"
+                @input="onVarDraft(v.name, $event)"
+                @change="onVarCommit(v.name)"
+                @focus="focusedVar = v.name"
+                @blur="focusedVar = null"
+                @keyup.enter="e => e.target.blur()"
+                v-tip="'修改后实时重算全部稿纸'"
+                spellcheck="false"
+              />
+              <button class="var-copy" @click="copyText(String(v.raw)).then(ok => ok && toast('已复制 ' + v.name, { type: 'success' }))" v-tip="'复制值'">⧉</button>
+            </div>
+          </div>
+        </aside>
+      </transition>
     </div>
 
     <!-- 汇率说明卡片 -->
@@ -552,36 +586,6 @@
         <span class="toast-msg">{{ toastState.msg }}</span>
         <button v-if="toastState.action" class="toast-action" @click="runToastAction">{{ toastState.action.label }}</button>
       </div>
-    </transition>
-
-    <!-- 变量面板（右侧滑入） -->
-    <transition name="slide-right">
-      <aside v-if="varPanelOpen" class="var-panel">
-        <div class="var-panel-head">
-          <div>
-            <span class="var-panel-title">变量面板</span>
-            <span class="var-panel-sub">所有稿纸共享 · 改值即重算</span>
-          </div>
-          <button class="var-panel-close" @click="varPanelOpen = false" aria-label="关闭">×</button>
-        </div>
-        <div class="var-panel-body">
-          <p class="var-panel-hint" v-if="!varEntries.length">还没有变量。<br/>在任意稿纸里用 <code>name = 值</code> 定义，例如 <code>tax = 0.13</code>，所有稿纸共享。</p>
-          <div v-for="v in varEntries" :key="v.name" class="var-row">
-            <span class="var-name">{{ v.name }}</span>
-            <span class="var-eq">=</span>
-            <input
-              class="var-input"
-              :value="varDrafts[v.name] ?? v.value"
-              @input="onVarDraft(v.name, $event)"
-              @change="onVarCommit(v.name)"
-              @keyup.enter="e => e.target.blur()"
-              v-tip="'修改后实时重算全部稿纸'"
-              spellcheck="false"
-            />
-            <button class="var-copy" @click="copyText(String(v.value)).then(ok => ok && toast('已复制 ' + v.name, { type: 'success' }))" v-tip="'复制值'">⧉</button>
-          </div>
-        </div>
-      </aside>
     </transition>
 
     <!-- 简易图表弹窗 -->
@@ -1584,18 +1588,28 @@ function toggleExportMenu() { exportMenuOpen.value = !exportMenuOpen.value }
 // 变量面板
 const varPanelOpen = ref(false)
 const varEntries = computed(() => {
-  return Object.keys(varScope).map(name => ({ name, value: displayResult(String(varScope[name])) }))
+  return Object.keys(varScope).map(name => {
+    const raw = String(varScope[name])
+    return { name, raw, value: displayResult(raw) }
+  })
 })
 
-// 变量草稿同步：面板打开或变量集合变化时，把草稿对齐到当前显示值
+// 当前正在编辑的变量名（输入期间保留用户输入，不被其他变量的联动重算覆盖）
+let focusedVar = null
+
+// 变量草稿同步：始终与当前 raw（无千分位的真实值）保持一致，保证面板与稿纸联动一致；
+// 仅跳过正在编辑的变量，避免输入中途被覆盖。raw 不含千分位逗号，同步后不会造成"改值变回原值"
 function syncVarDrafts() {
   const live = {}
-  for (const v of varEntries.value) live[v.name] = v.value
+  for (const v of varEntries.value) live[v.name] = v.raw
   for (const k of Object.keys(varDrafts)) if (!(k in live)) delete varDrafts[k]
-  Object.assign(varDrafts, live)
+  for (const k of Object.keys(live)) {
+    if (k === focusedVar) continue
+    varDrafts[k] = live[k]
+  }
 }
 watch(varEntries, syncVarDrafts)
-watch(varPanelOpen, (open) => { if (open) syncVarDrafts() })
+watch(varPanelOpen, (open) => { if (open) { focusedVar = null; syncVarDrafts() } })
 
 let varTimers = {}
 function isVarDefLine(expr, name) {
@@ -1637,8 +1651,18 @@ function commitVar(name, raw) {
     if (target) break
   }
   const expr = `${name} = ${trimmed}`
-  if (target) target.expr = expr
-  else currentSheet.value.lines.push({ ...newLine(), expr })
+  if (target) {
+    target.expr = expr
+    // 清理同名变量的其他定义行（全局 varScope 共享，后定义覆盖前定义——多行重复会让面板与某行显示矛盾）
+    for (const sh of sheets.value) {
+      for (let i = sh.lines.length - 1; i >= 0; i--) {
+        const ln = sh.lines[i]
+        if (ln !== target && isVarDefLine(ln.expr, name)) sh.lines.splice(i, 1)
+      }
+    }
+  } else {
+    currentSheet.value.lines.push({ ...newLine(), expr })
+  }
   rebuildScope()
 }
 
@@ -2045,6 +2069,7 @@ function onGlobalKeydown(e) {
     return
   }
   if (e.key === 'Escape') {
+    if (varPanelOpen.value) { varPanelOpen.value = false; return }
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
   }
@@ -2967,9 +2992,17 @@ body {
   .title-tab { padding: 4px; }
 }
 
+/* 变量面板遮罩 */
+.var-mask {
+  position: fixed; inset: 0; z-index: 95;
+  background: rgba(0, 0, 0, 0.28);
+  animation: var-mask-in .2s ease;
+}
+@keyframes var-mask-in { from { opacity: 0; } to { opacity: 1; } }
+
 /* 变量面板（右侧滑入） */
 .var-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 70;
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 96;
   width: 280px; max-width: 80%;
   background: var(--card); border-left: 1px solid var(--border);
   box-shadow: -12px 0 36px rgba(0, 0, 0, 0.12);
