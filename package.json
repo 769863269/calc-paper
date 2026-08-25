@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "jspdf": "^2.5.1",
     "mathjs": "^13.0.0",
     "vue": "^3.4.0"
   },

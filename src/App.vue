@@ -28,7 +28,7 @@
 
       <!-- 稿纸标签 -->
       <div class="sheet-bar">
-        <div class="sheet-tabs">
+        <div class="sheet-tabs" ref="sheetTabs">
           <div
             v-for="(sheet, sIdx) in sheets"
             :key="sheet.id"
@@ -52,10 +52,17 @@
             <span v-if="sheets.length > 1 && editingIndex !== sIdx" class="sheet-del" v-tip="'删除此稿纸'" @click.stop="delSheet(sIdx)">×</span>
           </div>
         </div>
+        <button class="sheet-add" @click="addSheet" v-tip="'新建稿纸'" aria-label="新建稿纸">
+          <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
       </div>
 
       <!-- 演算列表 -->
-      <div class="paper-body" ref="paperBody">
+      <div class="paper-wrap">
+      <div class="paper-body" :class="'paper-' + paperStyle" ref="paperBody">
         <!-- 空状态引导 -->
         <div v-if="guideOpen && isSheetEmpty" class="guide-card">
           <div class="guide-title">欢迎使用计算稿纸 👋</div>
@@ -157,6 +164,7 @@
           </div>
         </transition-group>
       </div>
+      </div>
 
       <!-- 底部新增输入区 -->
       <div class="bottom-input">
@@ -164,15 +172,18 @@
           <textarea
             ref="bottomInput"
             v-model="quickExpr"
+            :class="{ 'quick-input': true, 'mono-textarea': true, 'q-focused': bottomFocused }"
             @input="onQuickInput"
+            @focus="bottomFocused = true"
+            @blur="bottomFocused = false"
             @keydown.enter.prevent="addFromBottom"
+            @keydown.ctrl.enter.prevent="addFromBottom"
             @keydown.up.prevent="bottomUp"
-            class="quick-input mono-textarea"
             rows="1"
-            placeholder="计算公式（支持粘贴多行，↑ 调历史，再↑ 选行）"
+            placeholder="计算公式（支持粘贴多行，↑ 调历史，再↑ 选行，Ctrl+Enter 执行）"
             spellcheck="false"
           ></textarea>
-          <button class="quick-btn" @click="addFromBottom" v-tip="'新增一行'">=</button>
+          <button class="quick-btn" @click="addFromBottom" v-tip="'新增一行（Enter / Ctrl+Enter）'">=</button>
         </div>
       </div>
 
@@ -195,11 +206,12 @@
                 <line x1="14" y1="11" x2="14" y2="17" />
               </svg>
             </button>
-            <button class="tool-btn rate-btn" @click="fetchRateToInput" :disabled="rateLoading" v-tip="'获取 USD→CNY 参考汇率，点开可看详情并填入公式'">
+            <button class="tool-btn rate-btn" @click="fetchRateToInput" :disabled="rateLoading" v-tip="'获取 USD→CNY 参考汇率'">
               <span v-if="rateLoading" class="spinner"></span>
               <span v-else>汇</span>
             </button>
           </div>
+
           <div class="tool-group">
             <button class="tool-btn" @click="startRename(activeSheetIndex)" v-tip="'重命名稿纸'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -221,12 +233,80 @@
               </svg>
             </button>
           </div>
+
+          <!-- 新增功能组 -->
+          <div class="tool-group tool-group-feat">
+            <button class="tool-btn" @click="copyAllResults" v-tip="'复制全部结果'">
+              <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
+            </button>
+
+            <div class="tool-export-wrap">
+              <button class="tool-btn" @click="toggleExportMenu" v-tip="'导出稿纸'">
+                <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </button>
+              <transition name="pop">
+                <div v-if="exportMenuOpen" class="export-menu">
+                  <button class="exp-item" @click="exportMarkdown">
+                    <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span>Markdown</span>
+                  </button>
+                  <button class="exp-item" @click="exportImage">
+                    <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                    <span>图片（PNG）</span>
+                  </button>
+                  <button class="exp-item" @click="exportPdf">
+                    <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                    <span>PDF 稿纸</span>
+                  </button>
+                </div>
+              </transition>
+            </div>
+
+            <button class="tool-btn" :class="{ 'tool-on': varPanelOpen }" @click="varPanelOpen = !varPanelOpen" v-tip="'变量面板'">
+              <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 5H7l5 7-5 7h10" stroke-linejoin="round" />
+              </svg>
+            </button>
+
+            <div class="tool-export-wrap">
+              <button class="tool-btn" @click="styleMenuOpen = !styleMenuOpen" :class="{ 'tool-on': styleMenuOpen }" v-tip="'稿纸样式'">
+                <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="4" y="4" width="16" height="16" rx="1.5" />
+                  <line x1="4" y1="9" x2="20" y2="9" />
+                  <line x1="4" y1="14" x2="20" y2="14" />
+                </svg>
+              </button>
+              <transition name="pop">
+                <div v-if="styleMenuOpen" class="export-menu style-menu">
+                  <button class="exp-item" :class="{ active: paperStyle === 'white' }" @click="setPaperStyle('white')"><span class="sw sw-white"></span>白纸</button>
+                  <button class="exp-item" :class="{ active: paperStyle === 'ruled' }" @click="setPaperStyle('ruled')"><span class="sw sw-ruled"></span>横格稿纸</button>
+                  <button class="exp-item" :class="{ active: paperStyle === 'grid' }" @click="setPaperStyle('grid')"><span class="sw sw-grid"></span>方格稿纸</button>
+                  <button class="exp-item" :class="{ active: paperStyle === 'yellow' }" @click="setPaperStyle('yellow')"><span class="sw sw-yellow"></span>黄色纸</button>
+                  <button class="exp-item" :class="{ active: paperStyle === 'green' }" @click="setPaperStyle('green')"><span class="sw sw-green"></span>护眼绿</button>
+                </div>
+              </transition>
+            </div>
+
+            <button class="tool-btn" @click="openChart" v-tip="'简易图表'">
+              <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="4" y1="20" x2="20" y2="20" />
+                <rect x="6" y="11" width="3" height="9" rx="1" />
+                <rect x="11" y="6" width="3" height="14" rx="1" />
+                <rect x="16" y="14" width="3" height="6" rx="1" />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        <button class="btn-new-sheet" @click="addSheet">
-          <span class="plus">+</span>
-          <span>新稿纸</span>
-        </button>
+        <!-- 导出菜单点击外部关闭遮罩 -->
+        <div v-if="exportMenuOpen || styleMenuOpen" class="popover-mask" @click="exportMenuOpen = false; styleMenuOpen = false"></div>
       </footer>
     </div>
 
@@ -322,9 +402,9 @@
     </div>
     <div v-if="errPopover.show" class="popover-mask" @click="closeErrPopover"></div>
 
-    <!-- 自定义 tooltip（带箭头，延迟 300ms） -->
+    <!-- 自定义 tooltip（带箭头，延迟 300ms，自动翻转避开视口边缘） -->
     <transition name="fade">
-      <div v-if="tipState.show" class="tooltip" :style="{ left: tipState.x + 'px', top: tipState.y + 'px' }">{{ tipState.text }}</div>
+      <div v-if="tipState.show" class="tooltip" :class="'tooltip-' + tipState.placement" :style="{ left: tipState.x + 'px', top: tipState.y + 'px', '--arrow': tipState.arrowOffset + 'px' }">{{ tipState.text }}</div>
     </transition>
 
     <!-- 变量值悬浮提示 -->
@@ -473,11 +553,97 @@
         <button v-if="toastState.action" class="toast-action" @click="runToastAction">{{ toastState.action.label }}</button>
       </div>
     </transition>
+
+    <!-- 变量面板（右侧滑入） -->
+    <transition name="slide-right">
+      <aside v-if="varPanelOpen" class="var-panel">
+        <div class="var-panel-head">
+          <div>
+            <span class="var-panel-title">变量面板</span>
+            <span class="var-panel-sub">所有稿纸共享 · 改值即重算</span>
+          </div>
+          <button class="var-panel-close" @click="varPanelOpen = false" aria-label="关闭">×</button>
+        </div>
+        <div class="var-panel-body">
+          <p class="var-panel-hint" v-if="!varEntries.length">还没有变量。<br/>在任意稿纸里用 <code>name = 值</code> 定义，例如 <code>tax = 0.13</code>，所有稿纸共享。</p>
+          <div v-for="v in varEntries" :key="v.name" class="var-row">
+            <span class="var-name">{{ v.name }}</span>
+            <span class="var-eq">=</span>
+            <input
+              class="var-input"
+              :value="varDrafts[v.name] ?? v.value"
+              @input="onVarDraft(v.name, $event)"
+              @change="onVarCommit(v.name)"
+              @keyup.enter="e => e.target.blur()"
+              v-tip="'修改后实时重算全部稿纸'"
+              spellcheck="false"
+            />
+            <button class="var-copy" @click="copyText(String(v.value)).then(ok => ok && toast('已复制 ' + v.name, { type: 'success' }))" v-tip="'复制值'">⧉</button>
+          </div>
+        </div>
+      </aside>
+    </transition>
+
+    <!-- 简易图表弹窗 -->
+    <transition name="fade">
+      <div v-if="chartOpen" class="modal-mask" @click.self="chartOpen = false">
+        <div class="modal-card chart-card">
+          <div class="chart-head">
+            <span class="chart-title">简易图表</span>
+            <div class="chart-tabs">
+              <button :class="{ active: chartType === 'bar' }" @click="chartType = 'bar'">柱状图</button>
+              <button :class="{ active: chartType === 'line' }" @click="chartType = 'line'">折线图</button>
+            </div>
+            <button class="chart-close" @click="chartOpen = false" aria-label="关闭">×</button>
+          </div>
+          <div class="chart-input-row">
+            <textarea
+              v-model="chartInput"
+              class="chart-input mono-textarea"
+              rows="2"
+              placeholder="输入数据：12, 30, 25, 40　或　一月:12, 二月:30, 三月:25"
+              spellcheck="false"
+            ></textarea>
+          </div>
+          <div class="chart-canvas">
+            <svg v-if="chartPoints.length" :viewBox="chartSvg.viewBox" class="chart-svg" preserveAspectRatio="xMidYMid meet">
+              <!-- 网格 + 坐标轴 -->
+              <line v-for="(g, i) in chartSvg.gridY" :key="'gy' + i" :x1="g.x1" :y1="g.y1" :x2="g.x2" :y2="g.y2" class="chart-grid" />
+              <line :x1="chartSvg.axis.x" :y1="chartSvg.axis.y1" :x2="chartSvg.axis.x" :y2="chartSvg.axis.y2" class="chart-axis" />
+              <line :x1="chartSvg.axis.x" :y1="chartSvg.axis.y2" :x2="chartSvg.axis.x2" :y2="chartSvg.axis.y2" class="chart-axis" />
+              <!-- 柱状 -->
+              <template v-if="chartType === 'bar'">
+                <rect
+                  v-for="(p, i) in chartPoints"
+                  :key="'bar' + i"
+                  :x="p.bx"
+                  :y="p.y"
+                  :width="p.bw"
+                  :height="chartSvg.plotH - p.y + chartSvg.padT"
+                  rx="3"
+                  class="chart-bar"
+                />
+              </template>
+              <!-- 折线 -->
+              <template v-else>
+                <polyline :points="chartPoints.map(p => p.x + ',' + p.y).join(' ')" class="chart-line" />
+                <circle v-for="(p, i) in chartPoints" :key="'pt' + i" :cx="p.x" :cy="p.y" r="3.5" class="chart-dot" />
+              </template>
+              <!-- 数值标签 -->
+              <text v-for="(p, i) in chartPoints" :key="'lb' + i" :x="p.x" :y="p.y - 8" class="chart-val">{{ p.label }}</text>
+              <!-- X 轴标签 -->
+              <text v-for="(p, i) in chartPoints" :key="'xl' + i" :x="p.x" :y="chartSvg.axis.y2 + 16" class="chart-xlabel">{{ p.name }}</text>
+            </svg>
+            <p v-else class="chart-empty">输入数据后自动出图</p>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 // mathjs 按需引入
 import {
   create,
@@ -539,6 +705,13 @@ const sheets = ref([
 const activeSheetIndex = ref(0)
 const theme = ref('light')
 const currentSheet = computed(() => sheets.value[activeSheetIndex.value])
+// 全局变量作用域：所有稿纸共享同一份变量，面板修改即重算全部稿纸
+const varScope = reactive({})
+// 变量编辑时的本地草稿（避免输入过程中光标跳动）
+const varDrafts = reactive({})
+// 稿纸样式：white 白纸 / ruled 横格稿纸 / grid 方格稿纸
+const paperStyle = ref('white')
+const styleMenuOpen = ref(false)
 const isSheetEmpty = computed(() => !currentSheet.value.lines.some(l => l.expr.trim()))
 
 const editingIndex = ref(-1)
@@ -550,11 +723,31 @@ const latestLineIdx = ref(-1) // 最新通过底部公式框计算出来的行
 const quickExpr = ref('')
 const bottomInput = ref(null)
 const paperBody = ref(null)
+const sheetTabs = ref(null)
 let toastTimer = null
 let saveTimer = null
 
+// 切换稿纸时，把当前标签平滑滚入可视区（标签多时可横向滚动定位）
+watch(activeSheetIndex, () => {
+  nextTick(() => {
+    const sc = sheetTabs.value
+    if (!sc) return
+    const active = sc.querySelector('.sheet-tab.active')
+    if (active) active.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  })
+})
+// 普通鼠标竖向滚轮 → 标签栏横向滚动（单排标签不会纵向滚动，正好借来横滑）
+function onTabsWheel(e) {
+  const el = e.currentTarget
+  if (!el || el.scrollWidth <= el.clientWidth) return
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+    el.scrollLeft += e.deltaY
+    e.preventDefault()
+  }
+}
+
 // 自定义 tooltip（带箭头，延迟 300ms，替换原生 title）
-const tipState = ref({ show: false, text: '', x: 0, y: 0 })
+const tipState = ref({ show: false, text: '', x: 0, y: 0, placement: 'bottom', arrowOffset: 0 })
 let tipTimer = null
 function hideTip() {
   clearTimeout(tipTimer)
@@ -566,11 +759,23 @@ const vTip = {
     const onEnter = () => {
       tipTimer = setTimeout(() => {
         const r = el.getBoundingClientRect()
-        let x = r.left + r.width / 2
-        const pad = 8
-        const half = 110 // max-width 220 / 2
-        x = Math.max(half + pad, Math.min(x, window.innerWidth - half - pad))
-        tipState.value = { show: true, text: getText(), x, y: r.bottom + 6 }
+        const center = r.left + r.width / 2
+        const fitsBelow = window.innerHeight - r.bottom > 80
+        const placement = fitsBelow ? 'bottom' : 'top'
+        const y = placement === 'bottom' ? r.bottom + 6 : r.top - 6
+        // 第一帧先按目标中心显示，让 Vue 渲染出实际宽度
+        tipState.value = { show: true, text: getText(), x: center, y, placement, arrowOffset: 0 }
+        // 下一帧读取实际宽度，做整体可见性修正，并计算箭头偏移
+        requestAnimationFrame(() => {
+          const tipEl = document.querySelector('.tooltip')
+          if (!tipEl) return
+          const tw = tipEl.getBoundingClientRect().width
+          const pad = 8
+          let left = center - tw / 2
+          left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad))
+          const arrowOffset = center - (left + tw / 2)
+          tipState.value = { ...tipState.value, x: left + tw / 2, arrowOffset }
+        })
       }, 300)
     }
     const onLeave = () => hideTip()
@@ -604,7 +809,7 @@ function loadExample() {
     { ...newLine(), expr: '1650*tax', note: '含税额' },
     { ...newLine(), expr: 'min(1650, 1942)', note: '聚合函数' }
   ]
-  rebuildSheetScope(currentSheet.value)
+  rebuildScope()
   dismissGuide()
   toast('已载入示例', { type: 'success' })
 }
@@ -652,6 +857,7 @@ function pushUndo() {
 function undo() {
   if (!undoStack.value.length) { toast('没有可撤销的操作'); return }
   applySnapshot(JSON.parse(undoStack.value.pop()))
+  rebuildScope() // 撤销后变量作用域需同步重算
   toast('已撤销')
 }
 
@@ -868,26 +1074,23 @@ function applyAnim(line, prevResult, prevError, animate) {
   }
 }
 
-function rebuildSheetScope(sh) {
-  sh.vars = {}
-  for (const ln of sh.lines) computeLine(ln, sh.vars, false)
-}
+// 全局重算：清空变量作用域，按稿纸顺序把所有算式算进同一份 varScope
 function rebuildScope() {
-  for (const sh of sheets.value) rebuildSheetScope(sh)
+  Object.keys(varScope).forEach(k => { delete varScope[k] })
+  for (const sh of sheets.value) {
+    for (const ln of sh.lines) computeLine(ln, varScope, false)
+  }
 }
+// 兼容旧调用点：变量已是全局，单次改动也走全局重算
+function rebuildSheetScope() { rebuildScope() }
 
 function onExprInput(idx) {
   const sh = currentSheet.value
-  if (!sh.vars) sh.vars = {}
-  const varsBefore = JSON.stringify(sh.vars)
-  computeLine(sh.lines[idx], sh.vars)
-  // 级联重算：仅当本次编辑改变了变量（赋值行增删/改值）才重算后续行；
-  // 普通算式行编辑不触发，避免每敲一键 O(n) 全量重算
-  if (JSON.stringify(sh.vars) !== varsBefore) {
-    for (let i = idx + 1; i < sh.lines.length; i++) {
-      computeLine(sh.lines[i], sh.vars, false)
-    }
-  }
+  const varsBefore = JSON.stringify(varScope)
+  computeLine(sh.lines[idx], varScope)
+  // 仅当本次编辑改变了变量（赋值行增删/改值）才全局重算所有稿纸；
+  // 普通算式行编辑不影响其他行（行间不互相引用，仅通过变量关联）
+  if (JSON.stringify(varScope) !== varsBefore) rebuildScope()
   checkCompletion(idx)
   autosizeExpr(exprRefs[idx]) // 兜底：textarea 按内容自适应高度
 }
@@ -898,7 +1101,6 @@ function onExprPaste(idx, e) {
   if (!text.includes('\n')) return // 单行：交给默认行为
   e.preventDefault()
   const sh = currentSheet.value
-  if (!sh.vars) sh.vars = {}
   const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
   if (!lines.length) return
   pushUndo()
@@ -911,7 +1113,7 @@ function onExprPaste(idx, e) {
   const newRows = []
   // 替换当前行为「前半 + 粘贴首行」
   sh.lines[idx].expr = before + lines[0]
-  computeLine(sh.lines[idx], sh.vars)
+  computeLine(sh.lines[idx], varScope)
   // 后续行：第二行起每行一个新行，最后一行带 after
   for (let i = 1; i < lines.length; i++) {
     const isLast = i === lines.length - 1
@@ -919,9 +1121,9 @@ function onExprPaste(idx, e) {
     const line = { ...newLine(), expr }
     sh.lines.splice(idx + newRows.length + 1, 0, line)
     newRows.push(line)
-    computeLine(line, sh.vars)
+    computeLine(line, varScope)
   }
-  rebuildSheetScope(sh)
+  rebuildScope()
   // 焦点定位到最后一个新行末尾
   const lastNewIdx = idx + newRows.length
   focusedLine.value = lastNewIdx
@@ -1164,8 +1366,8 @@ function applyCompletion(ci) {
   const next = input.value.slice(0, start) + full + input.value.slice(start + word.length)
   const sh = currentSheet.value
   sh.lines[lIdx].expr = next
-  if (!sh.vars) sh.vars = {}
-  computeLine(sh.lines[lIdx], sh.vars) // 补全后立即重算，避免结果停留旧值
+  computeLine(sh.lines[lIdx], varScope)
+  rebuildScope() // 补全后立即全局重算，确保依赖该变量的其他稿纸同步更新
   completion.value = null
   nextTick(() => {
     input.focus()
@@ -1188,7 +1390,7 @@ async function delLine(idx) {
   else if (focusedLine.value > idx) focusedLine.value--
   if (latestLineIdx.value === idx) latestLineIdx.value = -1
   else if (latestLineIdx.value > idx) latestLineIdx.value--
-  rebuildSheetScope(currentSheet.value)
+  rebuildScope()
   toast(isLast ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
@@ -1197,14 +1399,14 @@ function addFromBottom() {
   if (!parts.length) { bottomInput.value?.focus({ preventScroll: true }); return }
   pushUndo() // 新增行可撤销（Ctrl+Z 或 toast）
   const sh = currentSheet.value
-  if (!sh.vars) sh.vars = {}
   let lastId = null
   for (const p of parts) {
     const line = { ...newLine(), expr: p }
     sh.lines.push(line)
-    computeLine(line, sh.vars)
+    computeLine(line, varScope)
     lastId = line.id
   }
+  rebuildScope() // 新增行若定义变量，全局重算所有稿纸
   quickExpr.value = ''
   const newIdx = sh.lines.length - 1
   focusedLine.value = newIdx // 高亮刚计算完成的行
@@ -1294,7 +1496,7 @@ function onDrop(e) {
   }
   fixIdx(focusedLine)
   fixIdx(latestLineIdx)
-  rebuildSheetScope(currentSheet.value)
+  rebuildScope()
   resetDrag()
   toast('已调整顺序', { type: 'success', action: { label: '撤销', run: undo } })
 }
@@ -1373,6 +1575,272 @@ async function copyText(text) {
     return legacyCopy(text)
   }
 }
+
+// ---------- 底部工具栏功能 ----------
+const bottomFocused = ref(false)
+const exportMenuOpen = ref(false)
+function toggleExportMenu() { exportMenuOpen.value = !exportMenuOpen.value }
+
+// 变量面板
+const varPanelOpen = ref(false)
+const varEntries = computed(() => {
+  return Object.keys(varScope).map(name => ({ name, value: displayResult(String(varScope[name])) }))
+})
+
+// 变量草稿同步：面板打开或变量集合变化时，把草稿对齐到当前显示值
+function syncVarDrafts() {
+  const live = {}
+  for (const v of varEntries.value) live[v.name] = v.value
+  for (const k of Object.keys(varDrafts)) if (!(k in live)) delete varDrafts[k]
+  Object.assign(varDrafts, live)
+}
+watch(varEntries, syncVarDrafts)
+watch(varPanelOpen, (open) => { if (open) syncVarDrafts() })
+
+let varTimers = {}
+function isVarDefLine(expr, name) {
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp('^\\s*' + esc + '\\s*=\\s*(?!=)').test(expr)
+}
+function onVarDraft(name, e) {
+  varDrafts[name] = e.target.value
+  if (varTimers[name]) clearTimeout(varTimers[name])
+  varTimers[name] = setTimeout(() => commitVar(name, e.target.value), 240)
+}
+function onVarCommit(name) {
+  if (varTimers[name]) { clearTimeout(varTimers[name]); delete varTimers[name] }
+  const raw = (varDrafts[name] ?? '').trim()
+  if (!raw) {
+    // 清空输入：还原为当前值，不提交
+    const found = varEntries.value.find(v => v.name === name)
+    if (found) varDrafts[name] = found.value
+    return
+  }
+  commitVar(name, varDrafts[name])
+}
+// 手动修改变量：更新其定义行（或新建一行），再全局重算所有稿纸
+function commitVar(name, raw) {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed) return
+  // 仅允许"值/表达式"，不允许只填变量名（避免 tax = tax 死循环）
+  if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed)) return
+  // 校验是否为合法数值/表达式（可引用其它已定义变量）
+  if (!/^-?\d*\.?\d+$/.test(trimmed)) {
+    const r = safeEval(trimmed, varScope)
+    if (!r.ok) return // 中间非法态，暂不提交
+  }
+  let target = null
+  for (const sh of sheets.value) {
+    for (const ln of sh.lines) {
+      if (isVarDefLine(ln.expr, name)) { target = ln; break }
+    }
+    if (target) break
+  }
+  const expr = `${name} = ${trimmed}`
+  if (target) target.expr = expr
+  else currentSheet.value.lines.push({ ...newLine(), expr })
+  rebuildScope()
+}
+
+// 稿纸样式切换（白纸 / 横格 / 方格），持久化
+function setPaperStyle(s) {
+  paperStyle.value = s
+  styleMenuOpen.value = false
+  scheduleSave()
+}
+
+// 复制全部结果
+async function copyAllResults() {
+  const lines = currentSheet.value.lines.filter(l => l.expr.trim())
+  if (!lines.length) { toast('当前稿纸没有可复制的内容'); return }
+  const ok = await copyText(lines.map(lineFullText).join('\n'))
+  toast(ok ? '已复制全部结果' : '复制失败：剪贴板不可用', { type: ok ? 'success' : 'error' })
+}
+
+// 文件下载辅助
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+function sheetExportName() {
+  return (currentSheet.value.name || '稿纸').replace(/[\\/:*?"<>|]/g, '_')
+}
+
+// 导出 Markdown
+function exportMarkdown() {
+  exportMenuOpen.value = false
+  const sh = currentSheet.value
+  const lines = sh.lines.filter(l => l.expr.trim())
+  const d = new Date()
+  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  let md = `# ${sh.name}\n\n> 计算稿纸导出 · ${stamp}\n\n`
+  const vars = varScope
+  if (Object.keys(vars).length) {
+    md += '**变量**\n\n'
+    for (const [k, val] of Object.entries(vars)) md += `- ${k} = ${displayResult(String(val))}\n`
+    md += '\n'
+  }
+  if (!lines.length) md += '_（暂无算式）_\n'
+  for (const l of lines) {
+    const res = (l.result && l.result !== '错误') ? ' = ' + displayResult(l.result) : (l.errorMsg ? ' ⚠ 错误' : '')
+    md += `- \`${l.expr.trim()}\`${res}${l.note.trim() ? ` _（${l.note.trim()}）_` : ''}\n`
+  }
+  downloadBlob(new Blob([md], { type: 'text/markdown;charset=utf-8' }), `${sheetExportName()}.md`)
+  toast('已导出 Markdown', { type: 'success' })
+}
+
+// 圆角矩形路径
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath()
+  c.moveTo(x + r, y)
+  c.arcTo(x + w, y, x + w, y + h, r)
+  c.arcTo(x + w, y + h, x, y + h, r)
+  c.arcTo(x, y + h, x, y, r)
+  c.arcTo(x, y, x + w, y, r)
+  c.closePath()
+}
+
+// 自绘稿纸 canvas（图片 / PDF 共用）
+function renderPaperCanvas() {
+  const sh = currentSheet.value
+  const lines = sh.lines.filter(l => l.expr.trim())
+  const isDark = theme.value === 'dark'
+  const bg = isDark ? '#1e2128' : '#ffffff'
+  const text = isDark ? '#f5f5f7' : '#1d1d1f'
+  const sub = isDark ? 'rgba(245,245,247,0.55)' : 'rgba(0,0,0,0.45)'
+  const accent = isDark ? '#0a84ff' : '#0071e3'
+  const border = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'
+  const scale = 2
+  const padX = 40, padTop = 64, padBottom = 36, rowH = 46, gap = 10
+  const W = 720
+  const H = padTop + padBottom + Math.max(1, lines.length) * (rowH + gap)
+  const cv = document.createElement('canvas')
+  cv.width = W * scale
+  cv.height = H * scale
+  const c = cv.getContext('2d')
+  c.scale(scale, scale)
+  c.fillStyle = bg
+  roundRect(c, 0, 0, W, H, 18); c.fill()
+  // 标题 + 日期
+  c.textBaseline = 'top'
+  c.fillStyle = text
+  c.font = '600 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  c.fillText(sh.name || '计算稿纸', padX, 24)
+  c.fillStyle = sub
+  c.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  const now = new Date()
+  c.fillText(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`, padX, 54)
+  c.strokeStyle = border
+  c.beginPath(); c.moveTo(padX, padTop - 12); c.lineTo(W - padX, padTop - 12); c.stroke()
+  // 行
+  let y = padTop
+  c.font = '15px "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace'
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]
+    c.fillStyle = text
+    c.fillText(l.expr.trim(), padX, y)
+    const res = (l.result && l.result !== '错误') ? displayResult(l.result) : (l.errorMsg ? '错误' : '')
+    c.fillStyle = res === '错误' ? '#ff3b30' : accent
+    const rw = c.measureText(res).width
+    c.fillText(res, W - padX - rw, y)
+    if (l.note.trim()) {
+      c.fillStyle = sub
+      c.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      const nw = c.measureText(l.note.trim()).width
+      c.fillText(l.note.trim(), W - padX - nw, y + 20)
+      c.font = '15px "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace'
+    }
+    y += rowH
+    if (i < lines.length - 1) {
+      c.strokeStyle = border
+      c.beginPath(); c.moveTo(padX, y - gap / 2); c.lineTo(W - padX, y - gap / 2); c.stroke()
+    }
+  }
+  if (!lines.length) {
+    c.fillStyle = sub
+    c.font = '14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    c.fillText('（暂无算式）', padX, y)
+  }
+  return { canvas: cv, cssW: W, cssH: H }
+}
+
+// 导出图片（PNG）
+function exportImage() {
+  exportMenuOpen.value = false
+  const { canvas } = renderPaperCanvas()
+  canvas.toBlob((blob) => {
+    if (!blob) { toast('导出图片失败', { type: 'error' }); return }
+    downloadBlob(blob, `${sheetExportName()}.png`)
+    toast('已导出图片', { type: 'success' })
+  }, 'image/png')
+}
+
+// 导出 PDF 稿纸
+function exportPdf() {
+  exportMenuOpen.value = false
+  import('jspdf').then(({ default: jsPDF }) => {
+    const { canvas, cssW, cssH } = renderPaperCanvas()
+    const img = canvas.toDataURL('image/png')
+    const pdf = new jsPDF({ orientation: cssW >= cssH ? 'landscape' : 'portrait', unit: 'px', format: [cssW, cssH] })
+    pdf.addImage(img, 'PNG', 0, 0, cssW, cssH)
+    pdf.save(`${sheetExportName()}.pdf`)
+    toast('已导出 PDF', { type: 'success' })
+  }).catch(() => toast('导出 PDF 失败（jspdf 未加载）', { type: 'error' }))
+}
+
+// ---------- 简易图表 ----------
+const chartOpen = ref(false)
+const chartInput = ref('')
+const chartType = ref('bar')
+function openChart() {
+  chartOpen.value = true
+  if (!chartInput.value) chartInput.value = '12, 30, 25, 40, 18'
+}
+// 解析输入：支持 "12,30" 或 "一月:12, 二月:30"
+const chartData = computed(() => {
+  const raw = (chartInput.value || '').trim()
+  if (!raw) return []
+  const parts = raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+  const out = []
+  for (const p of parts) {
+    const m = p.match(/^(.+?)[:\s=]+(-?\d+(?:\.\d+)?)$/)
+    if (m) out.push({ name: m[1].replace(/^\[|\]$/g, '').trim(), value: parseFloat(m[2]) })
+    else if (/^-?\d+(?:\.\d+)?$/.test(p)) out.push({ name: String(out.length + 1), value: parseFloat(p) })
+  }
+  return out
+})
+const chartSvg = computed(() => {
+  const data = chartData.value
+  const W = 560, H = 300, padL = 44, padR = 24, padT = 20, padB = 40
+  const plotW = W - padL - padR
+  const plotH = H - padT - padB
+  const maxV = Math.max(1, ...data.map(d => d.value))
+  const minV = Math.min(0, ...data.map(d => d.value))
+  const range = maxV - minV || 1
+  const yOf = (v) => padT + plotH * (1 - (v - minV) / range)
+  const points = data.map((d, i) => {
+    const xv = data.length === 1 ? padL + plotW / 2 : padL + plotW * i / (data.length - 1)
+    const yv = yOf(d.value)
+    const bw = data.length > 1 ? Math.min(40, plotW / data.length * 0.6) : 40
+    return { name: d.name, label: String(d.value), x: xv, y: yv, bw, bx: xv - bw / 2 }
+  })
+  const gridY = []
+  const ticks = 4
+  for (let i = 0; i <= ticks; i++) gridY.push({ x1: padL, y1: padT + plotH * i / ticks, x2: W - padR, y2: padT + plotH * i / ticks })
+  return {
+    viewBox: `0 0 ${W} ${H}`,
+    plotH, padT,
+    axis: { x: padL, y1: padT, y2: padT + plotH, x2: W - padR },
+    gridY, points
+  }
+})
+const chartPoints = computed(() => chartSvg.value.points)
 // ---------- 稿纸操作 ----------
 function uniqueSheetName(base) {
   const used = new Set(sheets.value.map(s => s.name))
@@ -1428,19 +1896,20 @@ async function clearSheet() {
   if (!ok) return
   pushUndo()
   currentSheet.value.lines = []
-  currentSheet.value.vars = {}
   focusedLine.value = -1
   latestLineIdx.value = -1
+  rebuildScope() // 清空后丢弃本稿纸定义的变量，全局重算
   toast('已清空当前稿纸', { type: 'success', action: { label: '撤销', run: undo } })
 }
 async function clearAllSheets() {
   const ok = await askConfirm('确定清空所有稿纸？清空后可通过撤销恢复。')
   if (!ok) return
   pushUndo()
-  sheets.value = [{ id: uid(), name: '稿纸1', vars: {}, lines: [] }]
+  sheets.value = [{ id: uid(), name: '稿纸1', lines: [] }]
   activeSheetIndex.value = 0
   focusedLine.value = -1
   latestLineIdx.value = -1
+  rebuildScope() // 清空后变量作用域一并重置
   toast('已清空所有稿纸', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
@@ -1597,7 +2066,7 @@ function onDocClick(e) {
 
 // ---------- 持久化 ----------
 function saveState() {
-  const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value }
+  const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value, paperStyle: paperStyle.value }
   try { localStorage.setItem('calc_paper_state', JSON.stringify(data)) } catch (e) {}
 }
 function loadState() {
@@ -1623,7 +2092,6 @@ const saved = loadState()
     sheets.value = saved.sheets.map(sh => ({
       id: sh.id || uid(),
       name: sh.name || '稿纸',
-      vars: {},
       lines: (sh.lines || []).map(l => ({
         id: l.id || uid(),
         expr: l.expr || '',
@@ -1639,6 +2107,7 @@ const saved = loadState()
   }
   if (typeof saved.activeSheetIndex === 'number') activeSheetIndex.value = saved.activeSheetIndex
   if (saved.theme === 'dark' || saved.theme === 'light') theme.value = saved.theme
+  if (typeof saved.paperStyle === 'string' && ['white', 'ruled', 'grid', 'yellow', 'green'].includes(saved.paperStyle)) paperStyle.value = saved.paperStyle
 }
 // 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
 rebuildScope()
@@ -1646,6 +2115,8 @@ onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   window.addEventListener('beforeunload', saveState)
+  // 标签栏：竖向滚轮转横向滚动（非 passive，才能 preventDefault）
+  if (sheetTabs.value) sheetTabs.value.addEventListener('wheel', onTabsWheel, { passive: false })
   // 初始化所有已存在行的 textarea 高度（兜底）
   nextTick(autosizeAllExpr)
 })
@@ -1653,6 +2124,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('beforeunload', saveState)
+  if (sheetTabs.value) sheetTabs.value.removeEventListener('wheel', onTabsWheel)
   clearInterval(rateTimer)
   scrollTimers.forEach(t => clearTimeout(t))
   scrollTimers.clear()
@@ -1665,7 +2137,7 @@ const varTip = ref({ show: false, idx: -1, vars: [], pos: {} })
 let varTipTimer = null
 function showVarTip(lIdx, e) {
   const sh = currentSheet.value
-  const vars = sh.vars || {}
+  const vars = varScope
   const line = sh.lines[lIdx]
   const tokens = (line.expr.match(/[a-zA-Z_][a-zA-Z0-9_]*/g) || [])
   const seen = new Set()
@@ -1716,6 +2188,9 @@ function hideVarTip() {
   --footer-bg: rgba(250, 250, 252, 0.8);
   --focus-bg: rgba(0, 113, 227, 0.06);
   --focus-ring: rgba(0, 113, 227, 0.12);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --rule: rgba(0, 0, 0, 0.05);
 }
 [data-theme="dark"] {
   --bg: #16181d;
@@ -1737,13 +2212,15 @@ function hideVarTip() {
   --footer-bg: rgba(30, 33, 40, 0.85);
   --focus-bg: rgba(10, 132, 255, 0.14);
   --focus-ring: rgba(10, 132, 255, 0.22);
+  --rule: rgba(255, 255, 255, 0.06);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 /* 主题切换平滑：仅对主题色块容器做过渡，避免给全部元素强加过渡（既拖慢输入/hover 反馈，又增加样式计算开销） */
 .app-wrapper, .app-card, .card-header, .sheet-bar, .paper-body, .card-footer,
-.bottom-input, .calc-row, .sheet-tab, .tool-btn, .btn-new-sheet, .modal-card,
+.bottom-input, .calc-row, .sheet-tab, .sheet-add, .tool-btn, .modal-card,
 .rate-card, .popover, .tooltip, .modal-btn, .icon-btn, .row-icon, .rename-input,
-.help-table td, .guide-card, .result-block {
+.help-table td, .guide-card, .result-block, .quick-input, .var-panel, .export-menu,
+.exp-item, .chart-card, .chart-tabs button {
   transition: background-color .3s ease, color .3s ease, border-color .3s ease;
 }
 html, body, #app { height: 100%; }
@@ -1759,11 +2236,12 @@ body {
   background: var(--bg);
 }
 .app-card {
+  position: relative;
   width: 100%; max-width: 1100px;
   /* 固定高度（类似一张纸），行少/空稿纸时不塌缩，内部滚动区负责内容伸缩 */
   height: min(88vh, 860px); max-height: 90vh;
   background: var(--card);
-  border-radius: 24px;
+  border-radius: var(--radius);
   box-shadow: var(--card-shadow);
   display: flex; flex-direction: column;
   overflow: hidden;
@@ -1785,7 +2263,7 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border);
 }
-.tab-icon { width: 22px; height: 22px; color: #ff9500; display: flex; align-items: center; justify-content: center; }
+.tab-icon { width: 22px; height: 22px; color: var(--text); display: flex; align-items: center; justify-content: center; }
 .tab-icon svg { width: 100%; height: 100%; }
 .tab-title { font-size: 14px; font-weight: 600; }
 .header-actions { display: flex; gap: 8px; }
@@ -1798,8 +2276,8 @@ body {
 .i-20 { width: 20px; height: 20px; }
 
 /* 稿纸标签 */
-.sheet-bar { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--card); }
-.sheet-tabs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+.sheet-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--card); }
+.sheet-tabs { flex: 1; min-width: 0; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; scroll-behavior: smooth; }
 .sheet-tabs::-webkit-scrollbar { display: none; }
 .sheet-tab {
   display: flex; align-items: center; gap: 6px; padding: 5px 12px;
@@ -1813,10 +2291,9 @@ body {
 /* 重命名铅笔图标：hover 显示 */
 .sheet-edit {
   width: 15px; height: 15px; border-radius: 50%;
-  display: none; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   opacity: 0.55; font-size: 10px; cursor: pointer; flex: 0 0 auto;
 }
-.sheet-tab:hover .sheet-edit { display: flex; }
 .sheet-edit:hover { opacity: 1; color: var(--accent); background: rgba(0, 113, 227, 0.12); }
 .sheet-tab.editing { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
 .sheet-del {
@@ -1829,7 +2306,29 @@ body {
 /* 演算列表 */
 
 
-.paper-body { flex: 1; overflow-y: auto; padding: 6px 0; }
+.paper-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.paper-body { flex: 1; overflow-y: auto; padding: 10px 0 16px; }
+/* 稿纸样式：横格 / 方格（白纸为默认纯色，无背景纹） */
+.paper-body.paper-ruled {
+  background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 31px, var(--rule) 31px, var(--rule) 32px);
+  background-position: 0 10px;
+}
+.paper-body.paper-grid {
+  background-image:
+    repeating-linear-gradient(to right, transparent 0, transparent 31px, var(--rule) 31px, var(--rule) 32px),
+    repeating-linear-gradient(to bottom, transparent 0, transparent 31px, var(--rule) 31px, var(--rule) 32px);
+  background-position: 0 10px;
+}
+/* 彩色稿纸：黄色纸 / 护眼绿（背景染色，卡片改为半透明白，保留可读与卡片轮廓） */
+.paper-body.paper-yellow { background-color: #fbf3d6; }
+.paper-body.paper-green { background-color: #e3efe3; }
+.paper-body.paper-yellow .calc-row,
+.paper-body.paper-green .calc-row {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+.paper-body.paper-yellow .calc-row:hover,
+.paper-body.paper-green .calc-row:hover { background: rgba(255, 255, 255, 0.78); }
 .calc-list { padding: 0 16px; position: relative; }
 
 /* 空状态引导 */
@@ -1837,7 +2336,7 @@ body {
   margin: 24px 16px;
   padding: 28px 26px;
   border: 1px dashed var(--border);
-  border-radius: 16px;
+  border-radius: var(--radius);
   background: var(--row-hover);
   text-align: center;
 }
@@ -1855,7 +2354,7 @@ body {
   margin: 22px 16px;
   padding: 22px 20px;
   border: 1px dashed var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: var(--row-hover);
   text-align: center;
 }
@@ -1865,10 +2364,11 @@ body {
 .calc-row {
   position: relative;
   background: var(--row-bg);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: var(--radius);
+  padding: 14px 16px;
   margin-bottom: 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 6px rgba(0, 0, 0, 0.03);
   transition: background-color .3s ease, border-color .3s ease, box-shadow .2s ease, opacity .2s ease;
 }
 .calc-row:hover { background: var(--row-hover); }
@@ -1960,7 +2460,7 @@ body {
 .result-block.error {
   background: rgba(255, 59, 48, 0.08);
   border: 1px solid rgba(255, 59, 48, 0.35);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 2px 8px;
   min-width: 108px;
   justify-content: center;
@@ -2026,9 +2526,23 @@ body {
 .input-row { display: flex; align-items: center; gap: 10px; }
 .quick-input {
   flex: 1;
-  padding: 8px 0;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
   /* 高度随内容增长（默认约 2 行，达上限才出现内部滚动） */
   min-height: 56px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.quick-input::placeholder { color: var(--text); opacity: 0.4; }
+.quick-input.q-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .quick-btn {
   width: 40px; height: 40px; border-radius: 10px;
@@ -2051,27 +2565,59 @@ body {
   background: var(--footer-bg);
   backdrop-filter: blur(10px);
 }
-.footer-tools { display: flex; gap: 12px; align-items: center; }
-.tool-group { display: flex; gap: 8px; }
+.footer-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tool-group { display: flex; gap: 6px; }
+.tool-group-feat { padding-left: 12px; border-left: 1px solid var(--border); margin-left: 2px; }
 .tool-btn {
   width: 34px; height: 34px; border-radius: 10px;
   border: none; background: var(--tool-bg); color: var(--text);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, transform 0.1s, color 0.15s, box-shadow 0.15s;
 }
-.tool-btn:hover { background: var(--tab-bg); }
+.tool-btn:hover { background: var(--tab-bg); color: var(--accent); }
+.tool-btn:active { transform: scale(0.92); background: var(--accent); color: #fff; }
+.tool-btn.tool-on { background: var(--accent); color: #fff; }
 .i-18 { width: 18px; height: 18px; }
+.i-16 { width: 16px; height: 16px; }
+.i-22 { width: 22px; height: 22px; }
 
-.btn-new-sheet {
-  display: flex; align-items: center; gap: 6px;
-  padding: 7px 14px;
-  border: 1px solid var(--border); border-radius: 100px;
-  background: var(--card); color: var(--text);
-  font-size: 13px; font-weight: 500; cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+/* 导出下拉 */
+.tool-export-wrap { position: relative; display: flex; }
+.export-menu {
+  position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16); padding: 6px; min-width: 156px;
+  display: flex; flex-direction: column; z-index: 95;
 }
-.btn-new-sheet:hover { border-color: var(--accent); color: var(--accent); }
-.btn-new-sheet .plus { font-size: 16px; line-height: 1; }
+.exp-item {
+  display: flex; align-items: center; gap: 10px;
+  border: none; background: transparent; color: var(--text);
+  text-align: left; padding: 9px 12px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 13px; transition: background 0.15s;
+}
+.exp-item:hover { background: var(--tab-bg); }
+.exp-item svg { color: var(--accent); flex: 0 0 auto; }
+/* 稿纸样式菜单：色块预览 */
+.sw { width: 16px; height: 16px; border-radius: 4px; flex: 0 0 auto; border: 1px solid rgba(0, 0, 0, 0.12); }
+.sw-white { background: #ffffff; }
+.sw-ruled { background: #ffffff; background-image: repeating-linear-gradient(to bottom, transparent 0, transparent 4px, #d9dee6 4px, #d9dee6 5px); }
+.sw-grid { background: #ffffff; background-image: repeating-linear-gradient(to right, transparent 0, transparent 4px, #d9dee6 4px, #d9dee6 5px), repeating-linear-gradient(to bottom, transparent 0, transparent 4px, #d9dee6 4px, #d9dee6 5px); }
+.sw-yellow { background: #fbf3d6; }
+.sw-green { background: #e3efe3; }
+
+/* 标签栏末尾：新建稿纸（与标签同行，常规入口） */
+.sheet-add {
+  flex: 0 0 auto;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px dashed var(--border); background: transparent; color: var(--muted);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+}
+.sheet-add:hover { background: var(--tab-bg); color: var(--accent); border-color: var(--accent); }
+.sheet-add:active { transform: scale(0.92); }
+.pop-enter-active, .pop-leave-active { transition: opacity 0.16s, transform 0.16s; }
+.pop-enter-from, .pop-leave-to { opacity: 0; transform: translateX(-50%) translateY(6px); }
 
 /* 弹层菜单 */
 .popover-mask { position: fixed; inset: 0; z-index: 80; }
@@ -2079,7 +2625,7 @@ body {
   position: fixed; z-index: 90;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.14);
   padding: 6px;
   min-width: 150px;
@@ -2087,7 +2633,7 @@ body {
 }
 .pop-item {
   border: none; background: transparent; color: var(--text);
-  text-align: left; padding: 8px 12px; border-radius: 8px;
+  text-align: left; padding: 8px 12px; border-radius: var(--radius-sm);
   font-size: 13px; cursor: pointer;
 }
 .pop-item:hover { background: var(--focus-bg); color: var(--accent); }
@@ -2114,7 +2660,7 @@ body {
 }
 .modal-card {
   background: var(--card);
-  border-radius: 18px;
+  border-radius: var(--radius);
   padding: 24px 22px 18px;
   width: min(340px, 86vw);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
@@ -2194,22 +2740,37 @@ body {
   display: inline-block; font-size: 11px; font-weight: 700; color: var(--accent);
   background: var(--focus-bg); padding: 1px 7px; border-radius: 100px; margin-right: 6px;
 }
-/* 自定义 tooltip（带箭头，长文本自动折行并限制宽度） */
+/* 自定义 tooltip（带箭头，长文本自动折行并限制宽度，自动翻转） */
 .tooltip {
   position: fixed; z-index: 200; transform: translateX(-50%);
   background: rgba(30, 33, 40, 0.94); color: #fff;
-  padding: 7px 12px; border-radius: 8px; font-size: 12px; line-height: 1.45;
-  max-width: 220px; text-align: left; pointer-events: none;
+  padding: 7px 12px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.45;
+  /* 最小宽度撑到内容自然宽度，防止被压成极窄条；最大宽度不超 220px 且留 8px 边距 */
+  min-width: max-content;
+  max-width: min(220px, calc(100vw - 16px));
+  text-align: left; pointer-events: none;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
-  overflow-wrap: break-word; word-break: break-word;
+  overflow-wrap: anywhere; word-break: normal;
 }
+.tooltip.tooltip-top { transform: translateX(-50%) translateY(-100%); }
 [data-theme="dark"] .tooltip { background: rgba(245, 245, 247, 0.95); color: #1d1d1f; }
+/* 箭头挂在 tooltip 外侧，跟随按钮中心偏移，避免边缘时被挡住 */
 .tooltip::after {
-  content: ''; position: absolute; left: 50%; top: -5px; transform: translateX(-50%);
-  border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-bottom: 5px solid rgba(30, 33, 40, 0.94);
+  content: ''; position: absolute; left: calc(50% + var(--arrow, 0px)); bottom: 100%;
+  transform: translateX(-50%); margin-bottom: 6px;
+  width: 0; height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: none;
+  border-bottom: 8px solid rgba(30, 33, 40, 0.94);
 }
-[data-theme="dark"] .tooltip::after { border-bottom-color: rgba(245, 245, 247, 0.95); }
+.tooltip.tooltip-top::after {
+  bottom: auto; top: 100%; margin-top: 6px; margin-bottom: 0;
+  border-bottom-color: transparent;
+  border-top: 8px solid rgba(30, 33, 40, 0.94);
+}
+[data-theme="dark"] .tooltip::after { border-bottom-color: rgba(245, 245, 247, 0.95); border-top-color: transparent; }
+[data-theme="dark"] .tooltip.tooltip-top::after { border-top-color: rgba(245, 245, 247, 0.95); border-bottom-color: transparent; }
 /* 汇率加载旋转 */
 .spinner {
   width: 14px; height: 14px; display: inline-block;
@@ -2229,7 +2790,7 @@ body {
 .rate-card {
   position: relative; width: min(380px, 92vw);
   background: var(--card); color: var(--text);
-  border: 1px solid var(--border); border-radius: 20px;
+  border: 1px solid var(--border); border-radius: var(--radius);
   padding: 22px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
   animation: ratePop .3s cubic-bezier(.22, 1, .36, 1);
   overflow: hidden;
@@ -2262,7 +2823,7 @@ body {
 
 .rate-hero {
   background: linear-gradient(180deg, var(--focus-bg) 0%, transparent 100%);
-  border: 1px solid var(--border); border-radius: 16px;
+  border: 1px solid var(--border); border-radius: var(--radius);
   padding: 18px; text-align: center; margin-bottom: 18px;
 }
 .rate-pair {
@@ -2278,7 +2839,7 @@ body {
 
 .rate-meta {
   display: flex; flex-direction: column; gap: 12px;
-  padding: 14px; background: var(--bg); border-radius: 14px;
+  padding: 14px; background: var(--bg); border-radius: var(--radius);
   margin-bottom: 16px;
 }
 .rate-meta-row { display: flex; align-items: center; gap: 12px; }
@@ -2316,7 +2877,7 @@ body {
   font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 .rate-btn-single {
-  border: none; border-radius: 12px; padding: 9px 22px;
+  border: none; border-radius: var(--radius); padding: 9px 22px;
   background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
   transition: transform .1s, filter .15s;
 }
@@ -2369,13 +2930,125 @@ body {
 .fade-enter-active, .fade-leave-active { transition: opacity .25s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
-/* 响应式 */
+/* 响应式：H5 / 窄屏弹性布局 */
 @media (max-width: 640px) {
-  .app-wrapper { padding: 12px; }
-  .app-card { height: min(92vh, 720px); max-height: 95vh; border-radius: 18px; }
+  .app-wrapper { padding: 0; }
+  .app-card {
+    width: 100%; max-width: 100%;
+    height: 100vh; height: 100dvh; max-height: none;
+    border-radius: 0; box-shadow: none;
+  }
+  .card-header {
+    padding: 10px 12px; gap: 8px;
+    flex-wrap: wrap;
+  }
+  .title-tab { padding: 5px 8px 5px 6px; }
+  .tab-title { font-size: 13px; }
+  .sheet-bar { padding: 8px 12px; }
+  .sheet-name { max-width: 96px; }
+  .card-footer { padding: 8px 12px; }
+  .footer-tools { flex-wrap: wrap; gap: 8px; }
+  .tool-group-feat { padding-left: 8px; }
+  .bottom-input { padding: 10px 12px; }
+  .calc-list { padding: 0 12px; }
+  .calc-row { padding: 12px 12px; }
   .result-value { font-size: 20px; }
   .expr-input, .quick-input { font-size: 18px; }
   .row-main { gap: 4px 6px; }
   .result-block { grid-column: 1 / -1; }
+  .quick-input { min-height: 52px; }
+  .quick-btn { width: 38px; height: 38px; }
 }
+@media (max-width: 380px) {
+  .sheet-name { max-width: 72px; }
+  .footer-tools { gap: 6px; }
+  .tool-btn { width: 32px; height: 32px; }
+  .tab-title { display: none; }
+  .title-tab { padding: 4px; }
+}
+
+/* 变量面板（右侧滑入） */
+.var-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 70;
+  width: 280px; max-width: 80%;
+  background: var(--card); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.12);
+  display: flex; flex-direction: column;
+}
+.var-panel-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.var-panel-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.var-panel-sub { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.var-panel-close {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm);
+}
+.var-panel-close:hover { background: var(--tab-bg); color: var(--text); }
+.var-panel-body { padding: 12px 16px; overflow-y: auto; flex: 1; }
+.var-panel-hint { font-size: 13px; line-height: 1.7; color: var(--muted); }
+.var-panel-hint code { background: var(--tab-bg); border-radius: 4px; padding: 1px 6px; font-family: "SF Mono", Consolas, monospace; }
+.var-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 10px; border-radius: 10px; background: var(--input-bg);
+  margin-bottom: 8px;
+}
+.var-name { font-family: "SF Mono", Consolas, monospace; font-weight: 600; color: var(--text); }
+.var-eq { color: var(--muted); }
+.var-val { flex: 1; font-family: "SF Mono", Consolas, monospace; color: var(--text); word-break: break-all; }
+.var-copy {
+  border: none; background: transparent; color: var(--muted);
+  cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 6px; flex: 0 0 auto;
+}
+.var-copy:hover { background: var(--tab-bg); color: var(--accent); }
+.var-input {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--border); background: var(--card); color: var(--text);
+  font-family: "SF Mono", Consolas, monospace; font-size: 13px;
+  padding: 6px 8px; border-radius: var(--radius-sm); outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.var-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.style-menu .exp-item.active { color: var(--accent); background: var(--focus-bg); font-weight: 600; }
+.slide-right-enter-active, .slide-right-leave-active { transition: transform .26s ease; }
+.slide-right-enter-from, .slide-right-leave-to { transform: translateX(100%); }
+
+/* 简易图表弹窗 */
+.chart-card { width: min(640px, 94vw); }
+.chart-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.chart-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.chart-tabs { display: flex; gap: 4px; margin-left: auto; background: var(--tab-bg); padding: 3px; border-radius: 10px; }
+.chart-tabs button {
+  border: none; background: transparent; color: var(--text); cursor: pointer;
+  font-size: 13px; padding: 6px 12px; border-radius: var(--radius-sm); transition: background 0.15s, color 0.15s;
+}
+.chart-tabs button.active { background: var(--card); color: var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+.chart-close {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm);
+}
+.chart-close:hover { background: var(--tab-bg); color: var(--text); }
+.chart-input-row { margin-bottom: 12px; }
+.chart-input {
+  width: 100%; resize: none; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--input-bg); color: var(--text);
+  padding: 10px 12px; font-size: 14px; outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.chart-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+.chart-canvas {
+  background: var(--input-bg); border-radius: var(--radius); padding: 10px;
+  display: flex; align-items: center; justify-content: center; min-height: 280px;
+}
+.chart-svg { width: 100%; height: auto; }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-axis { stroke: var(--muted); stroke-width: 1.5; }
+.chart-bar { fill: var(--accent); opacity: 0.88; transition: opacity 0.15s; }
+.chart-bar:hover { opacity: 1; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart-dot { fill: var(--accent); }
+.chart-val { fill: var(--text); font-size: 11px; text-anchor: middle; font-family: "SF Mono", Consolas, monospace; }
+.chart-xlabel { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+.chart-empty { color: var(--muted); font-size: 14px; }
 </style>
