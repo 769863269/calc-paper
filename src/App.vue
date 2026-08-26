@@ -84,7 +84,7 @@
           <button class="modal-btn primary" @click="loadExample">载入示例</button>
         </div>
 
-        <transition-group name="row" tag="div" class="calc-list">
+        <transition-group name="row" tag="div" class="calc-list" @before-leave="beforeRowLeave">
           <div
             v-for="(line, lIdx) in currentSheet.lines"
             :key="line.id"
@@ -1155,9 +1155,10 @@ function setRowRef(el, id) { if (el) rowRefs[id] = el; else delete rowRefs[id] }
 // 自适应 textarea 高度（不支持 CSS field-sizing 的浏览器兜底；支持的浏览器交给 CSS，避免双机制冲突）
 const FIELD_SIZING_SUPPORTED = typeof CSS !== 'undefined' && CSS.supports && CSS.supports('field-sizing', 'content')
 function autosizeExpr(el) {
-  if (!el || FIELD_SIZING_SUPPORTED) return
+  if (!el) return
+  const minH = parseFloat(getComputedStyle(el).minHeight) || 0
   el.style.height = 'auto'
-  el.style.height = el.scrollHeight + 'px'
+  el.style.height = Math.max(el.scrollHeight, minH) + 'px'
 }
 function autosizeAllExpr() {
   for (let i = 0; i < exprRefs.length; i++) autosizeExpr(exprRefs[i])
@@ -1175,35 +1176,31 @@ function laterScroll(fn, ms) {
   return t
 }
 // 把最新行滚动到底部可见区：直接操作滚动容器 paperBody。
-// 行的进入动画是 opacity+transform（不影响布局），行高在插入后即刻确定，无需等差 350ms；
-// 这里手动计算目标 scrollTop：让行底边比可视区底边高 GAP 像素（留呼吸间距）。
-// 用 rAF 等一帧让布局落定后立即平滑滚动，与淡入同步，避免"先蹦出再滚动"的割裂感。
+// 行的进入动画是 opacity+transform（不影响布局），行高在插入后即刻确定；
+// 用布局 offset 计算目标（offsetTop 不受进入动画 transform 影响，动画全程恒定），一次到位。
+// 目标夹在 [0, maxScroll] 内，平滑滚动不会 overshoot；不二次强制校正，避免"先到底再回弹"。
 function locateRow(id) {
   const container = paperBody.value
   if (!container) return
-  const GAP = 12
+  const GAP = 0
+  const maxScroll = () => Math.max(0, container.scrollHeight - container.clientHeight)
   const targetTop = () => {
     const el = id != null ? rowRefs[id] : null
+    let t
     if (el) {
       const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0
-      // 用布局 offset 计算（offsetTop 不受进入动画 transform 影响，动画全程恒定），
-      // 避免按"正在变形的 getBoundingClientRect"算目标导致先多滚、动画结束后被兜底校正回弹。
       // .calc-list 是 position:relative 的直接父，el.offsetTop 相对它；再加容器上内边距得内容区坐标。
       const rowBottom = padTop + el.offsetTop + el.offsetHeight
-      return Math.max(0, rowBottom + GAP - container.clientHeight)
+      t = rowBottom + GAP - container.clientHeight
+    } else {
+      t = maxScroll()
     }
-    return Math.max(0, container.scrollHeight - container.clientHeight)
+    // 夹在合法范围内，杜绝超出导致的平滑滚动 overshoot / 回弹
+    return Math.min(Math.max(0, t), maxScroll())
   }
+  // 入帧即滚，与淡入同步；目标恒定，无需兜底校正
   requestAnimationFrame(() => {
-    const t = targetTop()
-    container.scrollTo({ top: t, behavior: 'smooth' })
-    // 兜底校正：布局已稳定，通常无需校正；仅在极差情况下补位（用差值判定，避免无谓跳动）
-    laterScroll(() => {
-      const t2 = targetTop()
-      if (Math.abs(container.scrollTop - t2) > 1) {
-        container.scrollTo({ top: t2, behavior: 'auto' })
-      }
-    }, 420)
+    container.scrollTo({ top: targetTop(), behavior: 'smooth' })
   })
 }
 
@@ -1212,6 +1209,15 @@ function onRowFocus(idx) {
   focusedLine.value = idx
   if (idx !== latestLineIdx.value) latestLineIdx.value = -1
   ensureRowVisible(idx)
+  // 聚焦时按内容重算高度：统一由 JS 控制，杜绝 field-sizing 在移动端聚焦瞬间跳变尺寸
+  nextTick(() => autosizeExpr(exprRefs[idx]))
+}
+
+// 行离场动画前钩子：把起始 max-height 设为当前实际高度，使 .row-leave-to 的 max-height:0 过渡可插值，
+// 行在文档流内平滑收起（而非 position:absolute 脱离文档流导致下方行瞬间上跳），删除/清空都更丝滑
+function beforeRowLeave(el) {
+  el.style.maxHeight = el.offsetHeight + 'px'
+  void el.offsetHeight // 强制 reflow，让起始 max-height 生效后再过渡到 0
 }
 
 // 仅选中（高亮）当前行，不聚焦输入框、不滚动：用于点击行内按钮等交互
@@ -1924,6 +1930,8 @@ async function clearSheet() {
   latestLineIdx.value = -1
   rebuildScope() // 清空后丢弃本稿纸定义的变量，全局重算
   toast('已清空当前稿纸', { type: 'success', action: { label: '撤销', run: undo } })
+  // 清空后内容回缩，平滑滚回顶部，避免 scrollTop 超出新高度被硬截断跳变
+  nextTick(() => { const c = paperBody.value; if (c) c.scrollTo({ top: 0, behavior: 'smooth' }) })
 }
 async function clearAllSheets() {
   const ok = await askConfirm('确定清空所有稿纸？清空后可通过撤销恢复。')
@@ -1935,6 +1943,7 @@ async function clearAllSheets() {
   latestLineIdx.value = -1
   rebuildScope() // 清空后变量作用域一并重置
   toast('已清空所有稿纸', { type: 'success', action: { label: '撤销', run: undo } })
+  nextTick(() => { const c = paperBody.value; if (c) c.scrollTo({ top: 0, behavior: 'smooth' }) })
 }
 
 // ---------- 汇率填入公式（独立按钮，不影响其他功能） ----------
@@ -2332,7 +2341,7 @@ body {
 
 
 .paper-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.paper-body { flex: 1; overflow-y: auto; padding: 10px 0 16px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; }
+.paper-body { flex: 1; overflow-y: auto; padding: 10px 0 16px; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; overscroll-behavior: contain; }
 /* 细滚动条常驻：避免溢出时滚动条"突然冒出"造成整体横移的卡顿感 */
 .paper-body::-webkit-scrollbar { width: 8px; }
 .paper-body::-webkit-scrollbar-track { background: transparent; }
@@ -2444,13 +2453,13 @@ body {
 .expr-wrap { position: relative; min-width: 0; }
 /* 行内算式框与底部公式框共享的等宽 textarea 样式 */
 .mono-textarea {
+  box-sizing: border-box;
   border: none; background: transparent;
   font-size: 21px; font-weight: 600; color: var(--text);
   font-family: "SF Mono", SFMono-Regular, Consolas, monospace;
   resize: none; outline: none;
   line-height: 1.45;
-  /* 自动按内容高度（现代浏览器 Chrome 124+/Safari 18+）；旧浏览器由 JS autosizeExpr 兜底 */
-  field-sizing: content;
+  /* 高度统一由 JS autosizeExpr 控制：聚焦/失焦尺寸一致，避免 field-sizing 在移动端聚焦跳变 */
   max-height: 180px;
   overflow-y: auto;
 }
@@ -2564,8 +2573,8 @@ body {
   resize: none;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
-  /* 高度随内容增长（默认约 2 行，达上限才出现内部滚动） */
-  min-height: 56px;
+  /* 高度随内容增长：min-height 必须能完整放下两行 placeholder，避免空框被 autosize 压成一行 */
+  min-height: 78px;
   max-height: 200px;
   overflow-y: auto;
 }
@@ -2921,7 +2930,6 @@ body {
 .row-leave-active { transition: all .35s cubic-bezier(.22,1,.36,1); overflow: hidden; }
 .row-enter-from { opacity: 0; transform: translateY(14px) scale(.98); }
 .row-leave-to { opacity: 0; transform: translateY(-8px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
-.row-leave-active { position: absolute; left: 16px; right: 16px; margin-bottom: 0; }
 /* 结果出现/变化动画 */
 @keyframes resultPulse {
   0% { transform: scale(1); }
