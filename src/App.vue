@@ -1185,10 +1185,11 @@ function locateRow(id) {
   const targetTop = () => {
     const el = id != null ? rowRefs[id] : null
     if (el) {
-      const rowRect = el.getBoundingClientRect()
-      const cRect = container.getBoundingClientRect()
-      // row 底边相对于容器内容区顶部的位置
-      const rowBottom = rowRect.bottom - cRect.top + container.scrollTop
+      const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0
+      // 用布局 offset 计算（offsetTop 不受进入动画 transform 影响，动画全程恒定），
+      // 避免按"正在变形的 getBoundingClientRect"算目标导致先多滚、动画结束后被兜底校正回弹。
+      // .calc-list 是 position:relative 的直接父，el.offsetTop 相对它；再加容器上内边距得内容区坐标。
+      const rowBottom = padTop + el.offsetTop + el.offsetHeight
       return Math.max(0, rowBottom + GAP - container.clientHeight)
     }
     return Math.max(0, container.scrollHeight - container.clientHeight)
