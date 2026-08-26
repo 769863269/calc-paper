@@ -1176,31 +1176,27 @@ function laterScroll(fn, ms) {
   return t
 }
 // 把最新行滚动到底部可见区：直接操作滚动容器 paperBody。
-// 行的进入动画是 opacity+transform（不影响布局），行高在插入后即刻确定；
-// 用布局 offset 计算目标（offsetTop 不受进入动画 transform 影响，动画全程恒定），一次到位。
+// 行的进入动画是 opacity+transform（不影响布局），行高在插入后即刻确定。
 // 目标夹在 [0, maxScroll] 内，平滑滚动不会 overshoot；不二次强制校正，避免"先到底再回弹"。
 function locateRow(id) {
   const container = paperBody.value
   if (!container) return
-  const GAP = 0
   const maxScroll = () => Math.max(0, container.scrollHeight - container.clientHeight)
-  const targetTop = () => {
-    const el = id != null ? rowRefs[id] : null
-    let t
-    if (el) {
-      const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0
-      // .calc-list 是 position:relative 的直接父，el.offsetTop 相对它；再加容器上内边距得内容区坐标。
-      const rowBottom = padTop + el.offsetTop + el.offsetHeight
-      t = rowBottom + GAP - container.clientHeight
-    } else {
-      t = maxScroll()
-    }
-    // 夹在合法范围内，杜绝超出导致的平滑滚动 overshoot / 回弹
-    return Math.min(Math.max(0, t), maxScroll())
-  }
-  // 入帧即滚，与淡入同步；目标恒定，无需兜底校正
+  // 新增的行必然是最后一行：直接滚到容器真实最底部，不再依赖几何推算（padding-bottom 余量问题）。
+  const sh = currentSheet.value
+  const isLast = sh.lines.length && sh.lines[sh.lines.length - 1].id === id
   requestAnimationFrame(() => {
-    container.scrollTo({ top: targetTop(), behavior: 'smooth' })
+    if (isLast) {
+      container.scrollTo({ top: maxScroll(), behavior: 'smooth' })
+      return
+    }
+    const el = id != null ? rowRefs[id] : null
+    if (!el) { container.scrollTo({ top: maxScroll(), behavior: 'smooth' }); return }
+    const padTop = parseFloat(getComputedStyle(container).paddingTop) || 0
+    // .calc-list 是 position:relative 的直接父，el.offsetTop 相对它；再加容器上内边距得内容区坐标。
+    const rowBottom = padTop + el.offsetTop + el.offsetHeight
+    const t = Math.min(Math.max(0, rowBottom - container.clientHeight), maxScroll())
+    container.scrollTo({ top: t, behavior: 'smooth' })
   })
 }
 
@@ -2573,10 +2569,10 @@ body {
   resize: none;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s;
-  /* 高度随内容增长：min-height 必须能完整放下两行 placeholder，避免空框被 autosize 压成一行 */
+  /* 高度固定：min-height 必须能完整放下两行 placeholder；内容超出时直接截断，不显示滚动条 */
   min-height: 78px;
-  max-height: 200px;
-  overflow-y: auto;
+  max-height: 78px;
+  overflow-y: hidden;
 }
 .quick-input::placeholder { color: var(--text); opacity: 0.4; }
 .quick-input.q-focused {
@@ -2994,7 +2990,6 @@ body {
   .expr-input, .quick-input { font-size: 18px; }
   .row-main { gap: 4px 6px; }
   .result-block { grid-column: 1 / -1; }
-  .quick-input { min-height: 52px; }
   .quick-btn { width: 38px; height: 38px; }
 }
 @media (max-width: 380px) {
