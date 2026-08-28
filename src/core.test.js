@@ -39,6 +39,19 @@ describe('formatResult', () => {
     expect(formatResult(math.evaluate('1/3'))).toBe('0.333333333333')
     expect(formatResult(math.evaluate('1/7')).length).toBeLessThanOrEqual(14)
   })
+  it('可配置精度：默认 3 位', () => {
+    expect(formatResult(math.evaluate('1/3'), { precision: 3 })).toBe('0.333')
+    expect(formatResult(math.evaluate('pi'), { precision: 3 })).toBe('3.142')
+    expect(formatResult(math.evaluate('1.23456'), { precision: 3 })).toBe('1.235')
+  })
+  it('可配置精度：0 位保留整数', () => {
+    expect(formatResult(math.evaluate('1/3'), { precision: 0 })).toBe('0')
+    expect(formatResult(math.evaluate('2.9'), { precision: 0 })).toBe('3')
+  })
+  it('可配置精度：位数少于原长时保留原样', () => {
+    expect(formatResult(math.evaluate('0.13'), { precision: 3 })).toBe('0.13')
+    expect(formatResult(math.evaluate('1.2'), { precision: 3 })).toBe('1.2')
+  })
   it('空值返回空串', () => {
     expect(formatResult(undefined)).toBe('')
     expect(formatResult(null)).toBe('')
@@ -147,6 +160,9 @@ describe('safeEval', () => {
     expect(safeEval('1 +', {}).ok).toBe(false)
     // 未定义函数：必然抛错
     expect(safeEval('foo(1)', {}).ok).toBe(false)
+  })
+  it('透传精度配置', () => {
+    expect(safeEval('1/3', {}, { precision: 3 })).toEqual({ ok: true, value: '0.333' })
   })
 })
 

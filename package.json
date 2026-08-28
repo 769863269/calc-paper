@@ -2,6 +2,7 @@
   "name": "calc-paper",
   "private": true,
   "version": "0.1.0",
+  "author": "周周",
   "type": "module",
   "scripts": {
     "dev": "vite",

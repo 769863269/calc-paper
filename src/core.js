@@ -66,18 +66,22 @@ export function trimZeros(s) {
   return s.replace(TRAILING_ZEROS, '$1').replace(/\.$/, '')
 }
 
-export function formatResult(res) {
+export function formatResult(res, opts = {}) {
+  // precision：结果最多保留几位小数；默认 12 保持历史行为，App 内默认改为 3
+  const precision = opts.precision ?? 12
   if (res === undefined || res === null) return ''
   try {
     if (math.isBigNumber(res)) {
       // 整数：完整输出（不转科学计数法，不丢位）
       if (res.isInteger()) return res.toFixed(0)
+      // 精度为 0 时直接按整数四舍五入（math.format 对 precision:0 会当默认处理）
+      if (precision === 0) return res.toFixed(0)
       // 完整十进制（decimal.js 64 位有效数字，有限小数可精确表示）
       const full = res.toString()
-      // 小数部分 > 12 位：商业精度截断到 12 位（数学上必然截断，远超日常精度需求；避免 1/3 输出 64 位字符挤爆 UI）
+      // 小数部分超过设定精度：按精度四舍五入并去掉尾部无效 0
       const decIdx = full.indexOf('.')
-      if (decIdx >= 0 && full.length - decIdx - 1 > 12) {
-        const f = trimZeros(math.format(res, { notation: 'fixed', precision: 12 }))
+      if (decIdx >= 0 && full.length - decIdx - 1 > precision) {
+        const f = trimZeros(math.format(res, { notation: 'fixed', precision }))
         // fixed 变成 0（极小值）时保留指数形式，避免误显示为 0
         if (f === '0' || f === '-0') return full
         return f
@@ -85,7 +89,7 @@ export function formatResult(res) {
       // 有限且长度适中 → 完整显示，零偏差
       if (!full.includes('e') && full.length <= 32) return trimZeros(full)
       // 罕见大数（>32 位整数部分）：用指数形式
-      return trimZeros(math.format(res, { notation: 'exponential', precision: 12 }))
+      return trimZeros(math.format(res, { notation: 'exponential', precision }))
     }
     return math.format(res, { precision: 14 })
   } catch (e) { return String(res) }
@@ -158,8 +162,8 @@ export function suggestFix(msg) {
 }
 
 // 安全求值：返回 { ok, value } 或 { ok:false, error }
-export function safeEval(expr, scope) {
-  try { return { ok: true, value: formatResult(math.evaluate(expr, scope)) } }
+export function safeEval(expr, scope, opts = {}) {
+  try { return { ok: true, value: formatResult(math.evaluate(expr, scope), opts) } }
   catch (e) { return { ok: false, error: e } }
 }
 

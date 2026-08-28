@@ -11,9 +11,16 @@
             </svg>
           </div>
           <span class="tab-title">计算稿纸</span>
+          <span class="version-tag" v-tip="`v${APP_VERSION} · 作者 ${APP_AUTHOR}`">v{{ APP_VERSION }} · {{ APP_AUTHOR }}</span>
         </div>
 
         <div class="header-actions">
+          <div class="precision-control" v-tip="'结果保留小数位数'">
+            <span class="precision-label">小数</span>
+            <select v-model.number="decimalPlaces" class="precision-select">
+              <option v-for="n in precisionOptions" :key="n" :value="n">{{ n }}</option>
+            </select>
+          </div>
           <button class="icon-btn" @click="toggleTheme" v-tip="() => theme === 'light' ? '切换暗色' : '切换亮色'">
             <svg v-if="theme === 'light'" class="i-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="4" />
@@ -657,6 +664,9 @@ import {
   analyzeError, suggestFix, safeEval, lineFullText, uniqueSheetName,
   isVarDefLine, isValidVarName, isAssignExpr, parseChartInput
 } from './core.js'
+import pkg from '../package.json'
+const APP_VERSION = pkg.version
+const APP_AUTHOR = pkg.author || '周周'
 
 // ---------- 数据 ----------
 // 稿纸默认 0 行（不预留空行），所有行由用户操作（底部回车/载入示例等）产生
@@ -673,6 +683,9 @@ const varDrafts = reactive({})
 // 稿纸样式：white 白纸 / ruled 横格稿纸 / grid 方格稿纸
 const paperStyle = ref('white')
 const styleMenuOpen = ref(false)
+// 计算结果保留小数位数（默认 3 位，选项 0-12）
+const decimalPlaces = ref(3)
+const precisionOptions = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12]
 const isSheetEmpty = computed(() => !currentSheet.value.lines.some(l => l.expr.trim()))
 
 const editingIndex = ref(-1)
@@ -892,7 +905,7 @@ function computeLine(line, scope, animate = true) {
     line.errorMsg = '非法变量名'
     applyAnim(line, prevResult, prevError, animate); return
   }
-  const full = safeEval(trimmed, scope)
+  const full = safeEval(trimmed, scope, { precision: decimalPlaces.value })
   if (full.ok) {
     line.result = full.value
     line.partial = false
@@ -905,7 +918,7 @@ function computeLine(line, scope, animate = true) {
   if (incomplete) {
     const attempt = trimmed.replace(/[+\-*/^%]+$/, '').trim()
     if (attempt && attempt !== trimmed) {
-      const p = safeEval(attempt, scope)
+      const p = safeEval(attempt, scope, { precision: decimalPlaces.value })
       if (p.ok) {
         line.result = p.value
         line.partial = true
@@ -1503,7 +1516,7 @@ function commitVar(name, raw) {
   if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed)) return
   // 校验是否为合法数值/表达式（可引用其它已定义变量）
   if (!/^-?\d*\.?\d+$/.test(trimmed)) {
-    const r = safeEval(trimmed, varScope)
+    const r = safeEval(trimmed, varScope, { precision: decimalPlaces.value })
     if (!r.ok) return // 中间非法态，暂不提交
   }
   let target = null
@@ -1953,7 +1966,7 @@ function warnStorage(msg) {
   }
 }
 function saveState() {
-  const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value, paperStyle: paperStyle.value }
+  const data = { sheets: sheets.value, activeSheetIndex: activeSheetIndex.value, theme: theme.value, paperStyle: paperStyle.value, decimalPlaces: decimalPlaces.value }
   try { localStorage.setItem('calc_paper_state', JSON.stringify(data)) }
   catch (e) { warnStorage('保存失败：' + e) }
 }
@@ -1968,7 +1981,9 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => { saveState() }, 400)
 }
-watch([sheets, activeSheetIndex, theme], scheduleSave, { deep: true })
+watch([sheets, activeSheetIndex, theme, paperStyle, decimalPlaces], scheduleSave, { deep: true })
+// 小数位精度变化：全局重算，让已有结果实时刷新
+watch(decimalPlaces, () => rebuildScope())
 
 // ---------- 启动 ----------
 // 同步加载本地数据：首帧即渲染真实数据（localStorage 读取是同步的）。
@@ -1997,6 +2012,7 @@ if (saved) {
   if (typeof saved.activeSheetIndex === 'number') activeSheetIndex.value = saved.activeSheetIndex
   if (saved.theme === 'dark' || saved.theme === 'light') theme.value = saved.theme
   if (typeof saved.paperStyle === 'string' && ['white', 'ruled', 'grid', 'yellow', 'green'].includes(saved.paperStyle)) paperStyle.value = saved.paperStyle
+  if (typeof saved.decimalPlaces === 'number' && precisionOptions.includes(saved.decimalPlaces)) decimalPlaces.value = saved.decimalPlaces
 }
 // 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
 rebuildScope()
@@ -2159,7 +2175,25 @@ body {
 .tab-icon { width: 22px; height: 22px; color: var(--text); display: flex; align-items: center; justify-content: center; }
 .tab-icon svg { width: 100%; height: 100%; }
 .tab-title { font-size: 14px; font-weight: 600; }
-.header-actions { display: flex; gap: 8px; }
+.version-tag {
+  font-size: 11px; font-weight: 500; color: var(--text-secondary);
+  background: var(--tab-bg); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 100px; white-space: nowrap;
+}
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.precision-control {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--tab-bg); border: 1px solid var(--border);
+  border-radius: 100px; padding: 4px 8px 4px 10px;
+  font-size: 12px; color: var(--text-secondary); cursor: default;
+}
+.precision-label { white-space: nowrap; }
+.precision-select {
+  border: none; background: transparent; color: var(--text);
+  font-size: 12px; font-weight: 600; outline: none; cursor: pointer;
+  padding-right: 2px; appearance: none;
+  text-align: center; min-width: 22px;
+}
 .icon-btn {
   width: 32px; height: 32px; border: none; border-radius: 50%;
   background: var(--tool-bg); color: var(--text); cursor: pointer;
@@ -2841,6 +2875,9 @@ body {
   }
   .title-tab { padding: 5px 8px 5px 6px; }
   .tab-title { font-size: 13px; }
+  .version-tag { display: none; }
+  .precision-label { display: none; }
+  .precision-control { padding: 4px 8px; }
   .sheet-bar { padding: 8px 12px; }
   .sheet-name { max-width: 96px; }
   .card-footer { padding: 8px 12px; }
