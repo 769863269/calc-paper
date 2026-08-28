@@ -11,7 +11,7 @@
             </svg>
           </div>
           <span class="tab-title">计算稿纸</span>
-          <span class="version-tag" v-tip="`v${APP_VERSION} · 作者 ${APP_AUTHOR}`">v{{ APP_VERSION }} · {{ APP_AUTHOR }}</span>
+          <span class="version-tag">v{{ APP_VERSION }} · {{ APP_AUTHOR }}</span>
         </div>
 
         <div class="header-actions">
@@ -144,7 +144,7 @@
                   </div>
                 </div>
               </div>
-              <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }" v-tip="line.expr.trim() ? '算式：' + line.expr : null">
+              <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }">
                 <span class="eq-mark">=</span>
                 <span class="result-value">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
                 <span v-if="line.partial" class="partial-hint" :title="line.errorMsg">表达式不完整</span>
