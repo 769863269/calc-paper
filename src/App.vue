@@ -1139,6 +1139,9 @@ function onRowClick(idx, e) {
   const t = e.target
   if (t.closest('input, textarea, .completion-list')) return
   if (t.closest('button')) { selectRow(idx); return } // 复制/删除等按钮：行选中效果
+  // 用户在结果区拖拽选区（想复制）时，保留选区、不抢焦点，否则 focus 会清空选区
+  const sel = window.getSelection()
+  if (sel && sel.toString().trim().length > 0) return
   if (t.closest('.row-note')) focusNote(idx)
   else focusExpr(idx)
 }
