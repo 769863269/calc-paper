@@ -15,11 +15,27 @@
         </div>
 
         <div class="header-actions">
-          <div class="precision-control" v-tip="'结果保留小数位数'">
-            <span class="precision-label">小数</span>
-            <select v-model.number="decimalPlaces" class="precision-select">
-              <option v-for="n in precisionOptions" :key="n" :value="n">{{ n }}</option>
-            </select>
+          <div class="precision-control" :class="{ open: precisionOpen }">
+            <button
+              class="precision-btn"
+              @click.stop="precisionOpen = !precisionOpen"
+              v-tip="precisionOpen ? null : '保留小数位'"
+            >
+              <span class="precision-val">{{ decimalPlaces }}</span>
+              <span class="precision-unit">位</span>
+              <span class="precision-arrow">▾</span>
+            </button>
+            <div v-if="precisionOpen" class="precision-dropdown">
+              <div
+                v-for="n in precisionOptions"
+                :key="n"
+                class="precision-option"
+                :class="{ active: decimalPlaces === n }"
+                @click.stop="setPrecision(n)"
+              >
+                {{ n }}
+              </div>
+            </div>
           </div>
           <button class="icon-btn" @click="toggleTheme" v-tip="() => theme === 'light' ? '切换暗色' : '切换亮色'">
             <svg v-if="theme === 'light'" class="i-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -686,6 +702,8 @@ const styleMenuOpen = ref(false)
 // 计算结果保留小数位数（默认 3 位，选项 0-12）
 const decimalPlaces = ref(3)
 const precisionOptions = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12]
+const precisionOpen = ref(false)
+function setPrecision(n) { decimalPlaces.value = n; precisionOpen.value = false }
 const isSheetEmpty = computed(() => !currentSheet.value.lines.some(l => l.expr.trim()))
 
 const editingIndex = ref(-1)
@@ -729,16 +747,21 @@ function hideTip() {
 }
 const vTip = {
   mounted(el, binding) {
-    const getText = () => typeof binding.value === 'function' ? binding.value() : binding.value
+    const getText = () => {
+      const v = typeof binding.value === 'function' ? binding.value() : binding.value
+      return v && String(v).trim() ? String(v).trim() : ''
+    }
     const onEnter = () => {
       tipTimer = setTimeout(() => {
+        const text = getText()
+        if (!text) return
         const r = el.getBoundingClientRect()
         const center = r.left + r.width / 2
         const fitsBelow = window.innerHeight - r.bottom > 80
         const placement = fitsBelow ? 'bottom' : 'top'
         const y = placement === 'bottom' ? r.bottom + 6 : r.top - 6
         // 第一帧先按目标中心显示，让 Vue 渲染出实际宽度
-        tipState.value = { show: true, text: getText(), x: center, y, placement, arrowOffset: 0 }
+        tipState.value = { show: true, text, x: center, y, placement, arrowOffset: 0 }
         // 下一帧读取实际宽度，做整体可见性修正，并计算箭头偏移
         requestAnimationFrame(() => {
           const tipEl = document.querySelector('.tooltip')
@@ -1935,6 +1958,7 @@ function onGlobalKeydown(e) {
     return
   }
   if (e.key === 'Escape') {
+    if (precisionOpen.value) { precisionOpen.value = false; return }
     if (varPanelOpen.value) { varPanelOpen.value = false; return }
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
@@ -1951,6 +1975,7 @@ function onGlobalKeydown(e) {
 // 行内、行内浮层（复制菜单/错误浮层）上的点击不清除
 function onDocClick(e) {
   if (e.target.closest('.calc-row, .popover')) return
+  if (precisionOpen.value && !e.target.closest('.precision-control')) precisionOpen.value = false
   focusedLine.value = -1
   latestLineIdx.value = -1 // 底部添加行产生的"最新计算行"高亮也一并取消
 }
@@ -2182,18 +2207,44 @@ body {
 }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .precision-control {
-  display: flex; align-items: center; gap: 5px;
-  background: var(--tab-bg); border: 1px solid var(--border);
-  border-radius: 100px; padding: 4px 8px 4px 10px;
-  font-size: 12px; color: var(--text-secondary); cursor: default;
+  position: relative;
+  display: flex; align-items: center;
 }
-.precision-label { white-space: nowrap; }
-.precision-select {
-  border: none; background: transparent; color: var(--text);
-  font-size: 12px; font-weight: 600; outline: none; cursor: pointer;
-  padding-right: 2px; appearance: none;
-  text-align: center; min-width: 22px;
+.precision-btn {
+  display: flex; align-items: center; gap: 3px;
+  height: 30px; padding: 0 10px 0 12px;
+  background: var(--tab-bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 100px;
+  font-size: 13px; font-weight: 600; line-height: 1;
+  cursor: pointer; outline: none; user-select: none;
+  transition: background .15s, border-color .15s, box-shadow .15s;
 }
+.precision-btn:hover { background: var(--focus-bg); border-color: var(--border); }
+.precision-control.open .precision-btn,
+.precision-btn:active { background: var(--tab-active-bg); }
+.precision-val { min-width: 12px; text-align: center; }
+.precision-unit { font-size: 11px; color: var(--text-secondary); font-weight: 500; transform: scale(.92); }
+.precision-arrow { font-size: 10px; color: var(--text-secondary); margin-left: 2px; transition: transform .2s; }
+.precision-control.open .precision-arrow { transform: rotate(180deg); }
+.precision-dropdown {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 64px; max-height: 240px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,.14);
+  z-index: 50; padding: 4px;
+  scrollbar-width: thin;
+}
+.precision-dropdown::-webkit-scrollbar { width: 6px; }
+.precision-dropdown::-webkit-scrollbar-thumb { background: rgba(128,128,128,.35); border-radius: 3px; }
+.precision-option {
+  display: flex; align-items: center; justify-content: center;
+  height: 28px; padding: 0 10px;
+  border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
+  color: var(--text); cursor: pointer; transition: background .12s;
+}
+.precision-option:hover { background: var(--focus-bg); }
+.precision-option.active { background: var(--accent); color: #fff; }
+[data-theme="dark"] .precision-option.active { color: #1d1d1f; }
 .icon-btn {
   width: 32px; height: 32px; border: none; border-radius: 50%;
   background: var(--tool-bg); color: var(--text); cursor: pointer;
