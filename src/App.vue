@@ -22,7 +22,9 @@
               max="12"
               class="precision-input"
               :value="decimalPlaces"
+              @focus="onPrecisionFocus"
               @change="onPrecisionChange"
+              @keyup.enter="onPrecisionEnter"
             />
             <span class="precision-unit">位</span>
           </div>
@@ -696,6 +698,16 @@ function onPrecisionChange(e) {
   n = Math.max(0, Math.min(12, n))
   decimalPlaces.value = n
   e.target.value = n
+}
+// 点击进入编辑：自动全选当前值，方便直接覆盖输入
+function onPrecisionFocus(e) {
+  const el = e.target
+  requestAnimationFrame(() => { try { el.select() } catch (_) {} })
+}
+// 回车：先确认（change 已触发，这里再保险提交一次），再失焦切出输入框
+function onPrecisionEnter(e) {
+  onPrecisionChange(e)
+  e.target.blur()
 }
 const isSheetEmpty = computed(() => !currentSheet.value.lines.some(l => l.expr.trim()))
 
