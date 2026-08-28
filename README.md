@@ -59,10 +59,12 @@ calc-paper/
    └─ App.vue        # 全部前端逻辑与样式
 ```
 
-## 数据说明
+## 数据说明与隐私
 
-- 数据保存在浏览器 `localStorage`（键名 `calc_paper_state`）。
+- 所有数据（算式、稿纸、变量、主题）**仅保存在浏览器 `localStorage`（键名 `calc_paper_state`）**，纯本机存储，**不上传任何服务器**。
 - 清除该站点的浏览数据即可重置；无痕模式 / 换浏览器不共享数据。
+- 「汇」按钮仅向公开汇率源（open.er-api.com / ECB frankfurter.app / exchangerate-api.com）发起只读请求，不携带任何个人数据。
+- 导出 / 复制的稿纸内容请自行脱敏。
 
 ## 与原 Tauri 版相比
 
