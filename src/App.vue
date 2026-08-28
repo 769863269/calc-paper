@@ -1142,7 +1142,10 @@ function onRowClick(idx, e) {
   // 用户在结果区拖拽选区（想复制）时：点亮当前行高亮，但保留选区、不抢焦点，
   // 否则 focus 会清空选区。视觉选中态与实际焦点解耦，避免两者争抢。
   const sel = window.getSelection()
-  if (sel && sel.toString().trim().length > 0) { selectRow(idx); return }
+  if (sel && sel.toString().trim().length > 0) {
+    if (focusedLine.value !== idx) selectRow(idx) // 已在该行则跳过，避免无谓重渲染
+    return
+  }
   if (t.closest('.row-note')) focusNote(idx)
   else focusExpr(idx)
 }
