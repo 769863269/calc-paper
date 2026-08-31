@@ -98,7 +98,7 @@
           <button class="modal-btn primary" @click="loadExample">载入示例</button>
         </div>
 
-        <transition-group name="row" tag="div" class="calc-list" @before-leave="beforeRowLeave">
+        <transition-group name="row" tag="div" class="calc-list" :class="{ dense: isDenseList }" @before-leave="beforeRowLeave">
           <div
             v-for="(line, lIdx) in currentSheet.lines"
             :key="line.id"
@@ -107,6 +107,7 @@
             :data-id="line.id"
             :ref="(el) => setRowRef(el, line.id)"
             @click="onRowClick(lIdx, $event)"
+            @contextmenu.prevent="openRowMenu(lIdx, $event)"
             @dragstart="onDragStart($event, lIdx)"
             @dragover.prevent="onDragOver($event, lIdx)"
             @drop="onDrop($event)"
@@ -146,7 +147,7 @@
               </div>
               <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }">
                 <span class="eq-mark">=</span>
-                <span class="result-value">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
+                <span class="result-value" :ref="(el) => setResultRef(el, lIdx)" @dblclick.stop="copyResultDbl(lIdx)">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
                 <span v-if="line.partial" class="partial-hint" :title="line.errorMsg">表达式不完整</span>
                 <span v-else-if="line.result === '错误'" class="partial-hint err-badge" @click="openErrPopover(lIdx, $event)" v-tip="'点击查看原因与建议'">公式错误 ⓘ</span>
               </div>
@@ -444,6 +445,26 @@
     </div>
 
     <!-- 菜单遮罩 -->
+    <!-- 行右键菜单 -->
+    <div v-if="rowMenu.show" class="popover row-menu" :style="rowMenu.pos">
+      <button class="pop-item" :disabled="rowMenu.lIdx <= 0" @click="rowMenuMove(-1)">
+        <span class="pop-label">上移</span>
+      </button>
+      <button class="pop-item" :disabled="rowMenu.lIdx >= currentSheet.lines.length - 1" @click="rowMenuMove(1)">
+        <span class="pop-label">下移</span>
+      </button>
+      <div class="pop-sep"></div>
+      <button class="pop-item" @click="rowMenuInsert(0)"><span class="pop-label">在上方插入空行</span></button>
+      <button class="pop-item" @click="rowMenuInsert(1)"><span class="pop-label">在下方插入空行</span></button>
+      <div class="pop-sep"></div>
+      <button class="pop-item" @click="rowMenuCopy('result')"><span class="pop-label">复制结果</span></button>
+      <button class="pop-item" @click="rowMenuCopy('expr')"><span class="pop-label">复制算式</span></button>
+      <button class="pop-item" @click="rowMenuCopy('line')"><span class="pop-label">复制整行</span></button>
+      <div class="pop-sep"></div>
+      <button class="pop-item" @click="rowMenuClear"><span class="pop-label">清空此行</span></button>
+      <button class="pop-item danger" @click="rowMenuDelete"><span class="pop-label">删除此行</span></button>
+    </div>
+    <div v-if="rowMenu.show" class="popover-mask" @click="closeMenus"></div>
     <div v-if="copyMenu" class="popover-mask" @click="closeMenus"></div>
 
     <!-- 错误详情浮层（点击"公式错误"徽标展开） -->
@@ -558,8 +579,10 @@
                 <tr><td><code>Ctrl+Z</code></td><td>撤销删除 / 清空（最多 50 步）</td></tr>
                 <tr><td><code>Ctrl+Y</code> / <code>Ctrl+Shift+Z</code></td><td>重做（撤销后反悔，恢复被撤销的那一步）</td></tr>
                 <tr><td>拖动 <code>⋮⋮</code></td><td>调整算式行的顺序</td></tr>
+                <tr><td>右键行</td><td>上移 / 下移、插入空行、复制（结果·算式·整行）、清空、删除</td></tr>
+                <tr><td>双击结果数字</td><td>直接复制该行结果（未格式化的原始值，方便粘贴到别处继续算）</td></tr>
                 <tr><td>标签 ✎ / 双击标签</td><td>重命名稿纸（回车确认，Esc 取消）</td></tr>
-                              </tbody>
+                </tbody>
               </table>
             </div>
 
@@ -690,6 +713,10 @@ const sheets = ref([
 const activeSheetIndex = ref(0)
 const theme = ref('light')
 const currentSheet = computed(() => sheets.value[activeSheetIndex.value])
+// 长稿纸才启用 content-visibility：让浏览器跳过视口外行的渲染与布局，滚动明显更顺。
+// 阈值定在 120 行——短稿纸开了收益为零，却要承担屏外行高度估算不准的副作用。
+const DENSE_ROWS = 120
+const isDenseList = computed(() => currentSheet.value.lines.length > DENSE_ROWS)
 // 全局变量作用域：所有稿纸共享同一份变量，面板修改即重算全部稿纸
 const varScope = reactive({})
 // 变量编辑时的本地草稿（避免输入过程中光标跳动）
@@ -870,6 +897,7 @@ function applySnapshot(snap) {
 // 任何「新操作」前调用：压入撤销栈，同时清空重做栈
 // ——已撤销又产生新分支时，旧的重做路径不再成立（与常见编辑器一致）
 function pushUndo() {
+  flushCompute() // 快照前必须结算挂起的计算，否则会把「还没算出来的旧结果」存进历史
   const snap = serializeSnapshot()
   if (!snap) return
   undoStack.value.push(snap)
@@ -878,6 +906,7 @@ function pushUndo() {
 }
 function undo() {
   if (!undoStack.value.length) { toast('没有可撤销的操作'); return }
+  cancelPendingCompute() // 数据即将整体替换，挂起的计算已无意义
   const cur = serializeSnapshot()
   if (cur) redoStack.value.push(cur) // 当前态存入重做栈，供 Ctrl+Y 取回
   applySnapshot(JSON.parse(undoStack.value.pop())) // 内含 rebuildScope
@@ -885,6 +914,7 @@ function undo() {
 }
 function redo() {
   if (!redoStack.value.length) { toast('没有可重做的操作'); return }
+  cancelPendingCompute()
   const cur = serializeSnapshot()
   if (cur) undoStack.value.push(cur) // 当前态存回撤销栈，可继续 Ctrl+Z
   applySnapshot(JSON.parse(redoStack.value.pop())) // 内含 rebuildScope
@@ -1002,8 +1032,9 @@ function computeLine(line, scope, animate = true) {
 }
 
 function applyAnim(line, prevResult, prevError, animate) {
-  if (!animate) return
+  if (!animate) { cancelRoll(line.id); return }
   if (line.result !== '错误' && line.result && !line.partial && line.result !== prevResult) {
+    startRoll(line, prevResult) // 数字从旧值滚动到新值
     line.pulse = false
     nextTick(() => { line.pulse = true; setTimeout(() => { line.pulse = false }, 650) })
   }
@@ -1021,9 +1052,31 @@ function rebuildScope() {
   }
 }
 
+// ---------- 输入计算防抖 ----------
+// 连续敲键时每个字符都跑一遍 mathjs 求值是浪费（长稿纸 + 变量依赖时尤其明显）。
+// 计算延迟 180ms，但补全与 textarea 高度自适应保持即时，保证输入手感不迟钝。
+const COMPUTE_DEBOUNCE = 180
+let computeTimer = null
+let computePendingIdx = -1
 function onExprInput(idx) {
-  const sh = currentSheet.value
-  const line = sh.lines[idx]
+  checkCompletion(idx)        // 补全要跟手，不能延迟
+  autosizeExpr(exprRefs[idx]) // 高度自适应同理，兜底
+  scheduleCompute(idx)
+}
+function scheduleCompute(idx) {
+  computePendingIdx = idx
+  if (computeTimer) clearTimeout(computeTimer)
+  computeTimer = setTimeout(flushCompute, COMPUTE_DEBOUNCE)
+}
+// 立即结算挂起的计算：失焦 / 换行 / 删除行 / 切换稿纸 / 打快照前必须调用，
+// 否则结果会停在旧值（快照尤其危险，会把未计算的状态存进撤销栈）。
+function flushCompute() {
+  if (computeTimer) { clearTimeout(computeTimer); computeTimer = null }
+  const idx = computePendingIdx
+  if (idx < 0) return
+  computePendingIdx = -1
+  const line = currentSheet.value.lines[idx]
+  if (!line) return
   // 只有「赋值定义行」（name = ...）才会改变全局变量作用域；普通算式行编辑不涉及变量。
   // 用 wasAssign 记录编辑前是否赋值，覆盖「删除赋值」场景（需重算以移除失效变量）；
   // 非赋值行直接跳过昂贵的 JSON.stringify 全量 diff。
@@ -1036,8 +1089,11 @@ function onExprInput(idx) {
   } else {
     computeLine(line, varScope)
   }
-  checkCompletion(idx)
-  autosizeExpr(exprRefs[idx]) // 兜底：textarea 按内容自适应高度
+}
+// 丢弃挂起的计算：撤销/重做会整体替换数据，再执行旧行的计算毫无意义
+function cancelPendingCompute() {
+  if (computeTimer) { clearTimeout(computeTimer); computeTimer = null }
+  computePendingIdx = -1
 }
 
 // 行内粘贴：含 \n 时按行拆分到后续新行（与底部框行为一致）
@@ -1093,9 +1149,55 @@ function setNoteRef(el, idx) { if (el) noteRefs[idx] = el; else delete noteRefs[
 const rowRefs = {}
 function setRowRef(el, id) { if (el) rowRefs[id] = el; else delete rowRefs[id] }
 
+// ---------- 结果数字滚动 ----------
+// 直接写 DOM 文本而非走响应式字段：滚动每帧都改值，若放进 reactive 会触发整份模板
+// 每帧重渲染（行数多时必然掉帧）。动画结束帧写回与 Vue 渲染结果一致的文本，保持状态同步。
+const resultRefs = {}        // lIdx -> 结果 span
+function setResultRef(el, idx) { if (el) resultRefs[idx] = el; else delete resultRefs[idx] }
+const rollTimers = new Map() // lineId -> rAF 句柄
+const ROLL_MS = 320
+function prefersReducedMotion() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+}
+function cancelRoll(id) {
+  const t = rollTimers.get(id)
+  if (t != null) { cancelAnimationFrame(t); rollTimers.delete(id) }
+}
+function cancelAllRolls() {
+  rollTimers.forEach(t => cancelAnimationFrame(t))
+  rollTimers.clear()
+}
+// 旧值 → 新值逐帧插值；非数值 / 量级过大 / 用户偏好减少动效时直接切换，不做动画
+function startRoll(line, prevResult) {
+  cancelRoll(line.id)
+  const rowEl = rowRefs[line.id]
+  const el = rowEl && rowEl.querySelector('.result-value')
+  if (!el) return
+  const to = Number(line.result)
+  const from = Number(prevResult)
+  const rollable = !!prevResult && Number.isFinite(from) && Number.isFinite(to) &&
+    Math.abs(from) < 1e15 && Math.abs(to) < 1e15 && from !== to
+  if (!rollable || prefersReducedMotion()) return
+  const p = Math.max(0, Math.min(12, decimalPlaces.value))
+  const finalText = displayResult(line.result)
+  const t0 = performance.now()
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / ROLL_MS)
+    const e = 1 - Math.pow(1 - k, 3) // easeOutCubic
+    const v = from + (to - from) * e
+    el.textContent = k < 1 ? displayResult(v.toFixed(p)) : finalText
+    if (k < 1) rollTimers.set(line.id, requestAnimationFrame(step))
+    else rollTimers.delete(line.id)
+  }
+  rollTimers.set(line.id, requestAnimationFrame(step))
+}
+
 // 自适应 textarea 高度：统一由 JS 控制，杜绝 field-sizing 在移动端聚焦瞬间跳变尺寸
 function autosizeExpr(el) {
   if (!el) return
+  // 长稿纸启用 content-visibility 后，视口外元素的 scrollHeight 恒为 0。
+  // 此时不能据此改高度，否则长公式行被压成最小高度；等它进入视口（用户编辑时）再算即可。
+  if (!el.scrollHeight) return
   const minH = parseFloat(getComputedStyle(el).minHeight) || 0
   el.style.height = 'auto'
   el.style.height = Math.max(el.scrollHeight, minH) + 'px'
@@ -1152,6 +1254,7 @@ function onRowFocus(idx) {
 // 行离场动画前钩子：把起始 max-height 设为当前实际高度，使 .row-leave-to 的 max-height:0 过渡可插值，
 // 行在文档流内平滑收起（而非 position:absolute 脱离文档流导致下方行瞬间上跳），删除/清空都更丝滑
 function beforeRowLeave(el) {
+  if (el.dataset && el.dataset.id) cancelRoll(el.dataset.id) // 行被删，取消它可能还在跑的滚动动画
   el.style.maxHeight = el.offsetHeight + 'px'
   void el.offsetHeight // 强制 reflow，让起始 max-height 生效后再过渡到 0
 }
@@ -1210,6 +1313,7 @@ function ensureRowVisible(idx) {
   }, 480)
 }
 function onExprBlur(idx) {
+  flushCompute() // 失焦立即结算，别让防抖把结果留在旧值
   setTimeout(() => {
     if (noteRefs[idx] && document.activeElement === noteRefs[idx]) return
     if (focusedLine.value === idx) focusedLine.value = -1
@@ -1318,9 +1422,12 @@ function applyCompletion(ci) {
   const full = item.name
   const next = input.value.slice(0, start) + full + input.value.slice(start + word.length)
   const sh = currentSheet.value
-  sh.lines[lIdx].expr = next
-  computeLine(sh.lines[lIdx], varScope)
-  rebuildScope() // 补全后立即全局重算，确保依赖该变量的其他稿纸同步更新
+  const line = sh.lines[lIdx]
+  line.expr = next
+  computeLine(line, varScope)
+  // 补全只插入函数名，普通算式行不产生/改变任何变量，无需全量重算；
+  // 只有赋值行（tax=sqr→tax=sqrt(）改变了变量值，才需要重建作用域同步其他稿纸。
+  if (isAssignExpr(line.expr) || line.wasAssign) rebuildScope()
   completion.value = null
   nextTick(() => {
     input.focus()
@@ -1475,7 +1582,7 @@ function openCopyMenu(lIdx, e) {
   const rect = e.currentTarget.getBoundingClientRect()
   menuPos.value = { left: `${Math.min(rect.left, window.innerWidth - 230)}px`, top: `${rect.bottom + 6}px` }
 }
-function closeMenus() { copyMenu.value = null }
+function closeMenus() { copyMenu.value = null; rowMenu.value = { ...rowMenu.value, show: false } }
 const copyFeedbackIdx = ref(-1)
 let copyFbTimer = null
 function showCopyFeedback(idx) {
@@ -1493,6 +1600,90 @@ function copyRowAction(type) {
   closeMenus()
   if (!text) { toast('此行暂无内容'); return }
   copyText(text).then(ok => {
+    if (ok) showCopyFeedback(lIdx)
+    else toast('复制失败：剪贴板不可用', { type: 'error' })
+  })
+}
+
+// ---------- 行右键菜单 ----------
+const ROW_MENU_W = 196
+const ROW_MENU_H = 340
+const rowMenu = ref({ show: false, lIdx: -1, pos: {} })
+function openRowMenu(lIdx, e) {
+  closeMenus()
+  if (!currentSheet.value.lines[lIdx]) return
+  selectRow(lIdx) // 右键也点亮当前行，与左键点击行为一致
+  // 定位：默认贴光标右下，越界时翻转到左侧 / 上移，保证菜单完整可见
+  let x = e.clientX
+  let y = e.clientY
+  if (x + ROW_MENU_W > window.innerWidth - 8) x = Math.max(8, x - ROW_MENU_W)
+  if (y + ROW_MENU_H > window.innerHeight - 8) y = Math.max(8, window.innerHeight - ROW_MENU_H - 8)
+  rowMenu.value = { show: true, lIdx, pos: { left: `${x}px`, top: `${y}px` } }
+}
+function closeRowMenu() { rowMenu.value = { ...rowMenu.value, show: false } }
+// 滚动 / 尺寸变化：菜单是 fixed 定位，不关会飘到错误位置
+function onWindowScroll() { if (rowMenu.value.show) closeRowMenu() }
+// 上移 / 下移：dir 为 -1 或 1
+function rowMenuMove(dir) {
+  const lIdx = rowMenu.value.lIdx
+  const lines = currentSheet.value.lines
+  const to = lIdx + dir
+  if (to < 0 || to >= lines.length) return
+  closeRowMenu()
+  pushUndo()
+  const [moved] = lines.splice(lIdx, 1)
+  lines.splice(to, 0, moved)
+  focusedLine.value = to
+  latestLineIdx.value = -1
+  rebuildScope() // 变量按序依赖，行序变化后需重算
+  nextTick(() => ensureRowVisible(to))
+}
+// offset：0 = 插在上方，1 = 插在下方
+function rowMenuInsert(offset) {
+  const lIdx = rowMenu.value.lIdx
+  closeRowMenu()
+  pushUndo()
+  const at = lIdx + offset
+  currentSheet.value.lines.splice(at, 0, newLine())
+  if (focusedLine.value >= at) focusedLine.value++
+  if (latestLineIdx.value >= at) latestLineIdx.value++
+  nextTick(() => { focusExpr(at); ensureRowVisible(at) })
+}
+function rowMenuCopy(type) {
+  const lIdx = rowMenu.value.lIdx
+  const line = currentSheet.value.lines[lIdx]
+  closeRowMenu()
+  const text = type === 'result' ? (line.result && line.result !== '错误' ? line.result : '')
+    : type === 'expr' ? line.expr
+    : lineFullText(line)
+  if (!text) { toast('此行暂无内容'); return }
+  copyText(text).then(ok => {
+    if (ok) showCopyFeedback(lIdx)
+    else toast('复制失败：剪贴板不可用', { type: 'error' })
+  })
+}
+function rowMenuClear() {
+  const lIdx = rowMenu.value.lIdx
+  closeRowMenu()
+  const line = currentSheet.value.lines[lIdx]
+  if (!line) return
+  if (!line.expr.trim() && !line.note.trim()) { toast('此行已是空行'); return }
+  pushUndo()
+  line.expr = ''; line.note = ''; line.result = ''; line.partial = false
+  line.errorMsg = ''; line.time = ''
+  rebuildScope()
+  toast('已清空此行', { type: 'success', action: { label: '撤销', run: undo } })
+}
+async function rowMenuDelete() {
+  const lIdx = rowMenu.value.lIdx
+  closeRowMenu()
+  await delLine(lIdx) // 复用现有删除流程（含二次确认与撤销）
+}
+// 双击结果数字即复制：复制未格式化的原始数值，便于粘贴到别处继续计算
+function copyResultDbl(lIdx) {
+  const line = currentSheet.value.lines[lIdx]
+  if (!line || !line.result || line.result === '错误') { toast('此行暂无可复制的结果'); return }
+  copyText(line.result).then(ok => {
     if (ok) showCopyFeedback(lIdx)
     else toast('复制失败：剪贴板不可用', { type: 'error' })
   })
@@ -1805,6 +1996,7 @@ function addSheet() {
   activeSheetIndex.value = sheets.value.length - 1
 }
 function switchSheet(idx) {
+  flushCompute() // 切走前结算，否则挂起的计算会算到已切换的稿纸上
   activeSheetIndex.value = idx
   focusedLine.value = -1
   latestLineIdx.value = -1
@@ -1988,7 +2180,31 @@ function fillRateToFormula(val) {
 }
 
 // ---------- 主题 ----------
-function toggleTheme() { theme.value = theme.value === 'light' ? 'dark' : 'light' }
+// 主题切换：只在切换后的 280ms 内挂过渡类，避免长期给全量元素加 transition 影响动画性能
+let themeAnimTimer = null
+function toggleTheme() {
+  const root = document.documentElement
+  root.classList.add('theme-anim')
+  if (themeAnimTimer) clearTimeout(themeAnimTimer)
+  themeAnimTimer = setTimeout(() => root.classList.remove('theme-anim'), 280)
+  theme.value = theme.value === 'light' ? 'dark' : 'light'
+}
+// 按钮涟漪：事件委托，命中选择器即生效，无需逐个按钮改模板
+const RIPPLE_SEL = '.tool-btn, .row-icon, .quick-btn, .sheet-add, .exp-item, .pop-item, .rate-btn-single'
+function onRippleDown(e) {
+  if (prefersReducedMotion()) return
+  const el = e.target.closest && e.target.closest(RIPPLE_SEL)
+  if (!el || el.disabled) return
+  const r = el.getBoundingClientRect()
+  const size = Math.max(r.width, r.height) * 2
+  const s = document.createElement('span')
+  s.className = 'ripple-wave'
+  s.style.width = s.style.height = size + 'px'
+  s.style.left = (e.clientX - r.left - size / 2) + 'px'
+  s.style.top = (e.clientY - r.top - size / 2) + 'px'
+  el.appendChild(s)
+  setTimeout(() => s.remove(), 520)
+}
 
 // ---------- 全局快捷键 ----------
 function onGlobalKeydown(e) {
@@ -1998,6 +2214,7 @@ function onGlobalKeydown(e) {
     return
   }
   if (e.key === 'Escape') {
+    if (rowMenu.value.show || copyMenu.value) { closeMenus(); return }
     if (varPanelOpen.value) { varPanelOpen.value = false; return }
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
@@ -2047,9 +2264,12 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => { saveState() }, 400)
 }
-watch([sheets, activeSheetIndex, theme, paperStyle, decimalPlaces], scheduleSave, { deep: true })
-// 小数位精度变化：全局重算，让已有结果实时刷新
-watch(decimalPlaces, () => rebuildScope())
+// 只有 sheets 需要 deep（行内字段变化也要触发保存）；其余都是标量 ref，
+// 浅监听即可，避免对它们做无意义的深度遍历。scheduleSave 自带 400ms 防抖，重复入队无副作用。
+watch(sheets, scheduleSave, { deep: true })
+watch([activeSheetIndex, theme, paperStyle], scheduleSave)
+// 小数位精度变化：全局重算刷新已有结果，并触发保存（合并成一个监听，避免两处都盯 decimalPlaces）
+watch(decimalPlaces, () => { rebuildScope(); scheduleSave() })
 
 // ---------- 启动 ----------
 // 同步加载本地数据：首帧即渲染真实数据（localStorage 读取是同步的）。
@@ -2086,6 +2306,10 @@ onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   window.addEventListener('beforeunload', saveState)
+  // 捕获阶段监听：内部滚动容器的滚动也能收到，滚动时关闭固定定位的右键菜单避免飘移
+  window.addEventListener('scroll', onWindowScroll, true)
+  window.addEventListener('resize', onWindowScroll)
+  window.addEventListener('pointerdown', onRippleDown, true)
   // 标签栏：竖向滚轮转横向滚动（非 passive，才能 preventDefault）
   if (sheetTabs.value) sheetTabs.value.addEventListener('wheel', onTabsWheel, { passive: false })
   // 初始化所有已存在行的 textarea 高度（兜底）
@@ -2095,7 +2319,12 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('beforeunload', saveState)
+  window.removeEventListener('scroll', onWindowScroll, true)
+  window.removeEventListener('resize', onWindowScroll)
   if (sheetTabs.value) sheetTabs.value.removeEventListener('wheel', onTabsWheel)
+  window.removeEventListener('pointerdown', onRippleDown, true)
+  cancelAllRolls()
+  cancelPendingCompute()
   clearInterval(rateTimer)
   scrollTimers.forEach(t => clearTimeout(t))
   scrollTimers.clear()
@@ -2400,6 +2629,13 @@ body {
   width: 4px; height: 64%; border-radius: 4px; background: var(--accent);
 }
 .calc-row.dragging { opacity: 0.45; }
+/* 长稿纸（>120 行）：跳过视口外行的渲染与布局，滚动与输入都更顺。
+   contain-intrinsic-size 的 auto 关键字让浏览器记住真实行高，只有首次用 120px 估算，
+   避免滚动条长度反复跳动。 */
+.calc-list.dense .calc-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
 
 /* 行内 grid 布局：算式独占整行（占满宽度），结果固定在第二行右下角，互不抢宽度 */
 .row-main {
@@ -2491,6 +2727,9 @@ body {
   /* 长结果换行完整展示，不再单行截断 */
   overflow: visible; text-overflow: clip; white-space: normal;
   overflow-wrap: anywhere;
+  cursor: copy; /* 提示：双击即可复制 */
+  /* transform 对 inline 元素无效，脉冲缩放必须 inline-block；结果靠右，从右侧缩放不越界 */
+  display: inline-block; max-width: 100%; transform-origin: right center;
 }
 
 .row-note { margin-top: 6px; }
@@ -2644,7 +2883,15 @@ body {
   text-align: left; padding: 8px 12px; border-radius: var(--radius-sm);
   font-size: 13px; cursor: pointer;
 }
-.pop-item:hover { background: var(--focus-bg); color: var(--accent); }
+.pop-item:not(:disabled):hover { background: var(--focus-bg); color: var(--accent); }
+.pop-item:disabled { opacity: .38; cursor: default; }
+/* 右键菜单分隔线 */
+.pop-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.pop-item.danger { color: var(--error); }
+.pop-item.danger:not(:disabled):hover { background: rgba(255, 59, 48, .10); color: var(--error); }
+/* 行右键菜单 */
+.row-menu { min-width: 196px; padding: 6px; }
+.row-menu .pop-item { padding: 7px 12px; }
 /* 行复制菜单：标签 + 内容预览 */
 .copy-menu { min-width: 230px; }
 .copy-menu .pop-item {
@@ -2899,13 +3146,17 @@ body {
 .row-leave-active { transition: all .35s cubic-bezier(.22,1,.36,1); overflow: hidden; }
 .row-enter-from { opacity: 0; transform: translateY(14px) scale(.98); }
 .row-leave-to { opacity: 0; transform: translateY(-8px) scale(.98); max-height: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+/* 位移过渡：删除/插入/排序后，其余行平滑滑到新位置（此前是瞬间跳位）。
+   注意：不能给 .row-leave-active 加 position:absolute —— transition-group 不会为离开元素
+   设置 top/left，行会瞬间跳到容器左上角。保留其在流内收缩即可。 */
+.row-move { transition: transform .32s cubic-bezier(.22,1,.36,1); }
 /* 结果出现/变化动画 */
 @keyframes resultPulse {
   0% { transform: scale(1); }
-  30% { transform: scale(1.12); color: var(--accent); }
-  100% { transform: scale(1); }
+  30% { transform: scale(1.12); color: var(--accent); text-shadow: 0 0 18px var(--focus-ring); }
+  100% { transform: scale(1); text-shadow: none; }
 }
-.calc-row.pulse .result-value { animation: resultPulse .65s ease; }
+.calc-row.pulse .result-value { animation: resultPulse .65s cubic-bezier(.22,1,.36,1); }
 /* 错误行抖动 */
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
@@ -2922,6 +3173,37 @@ body {
 }
 .calc-row.drop-above::before { top: -5px; }
 .calc-row.drop-below::after { bottom: -5px; }
+
+/* 按钮涟漪：JS 在按下点插入 .ripple-wave，动画结束自行移除 */
+.tool-btn, .row-icon, .quick-btn, .sheet-add, .exp-item, .pop-item, .rate-btn-single {
+  position: relative; overflow: hidden;
+}
+.ripple-wave {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  background: currentColor; opacity: .20;
+  transform: scale(0);
+  animation: rippleOut .5s cubic-bezier(.22,1,.36,1) forwards;
+}
+@keyframes rippleOut {
+  from { transform: scale(0); opacity: .20; }
+  to { transform: scale(1); opacity: 0; }
+}
+
+/* 主题切换过渡：仅切换后 280ms 内存在，平时不挂，避免全量元素常驻 transition */
+.theme-anim, .theme-anim *, .theme-anim *::before, .theme-anim *::after {
+  transition: background-color .24s ease, color .24s ease, border-color .24s ease !important;
+}
+
+/* 尊重系统"减少动效"偏好：关闭装饰性动画与过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .ripple-wave { display: none; }
+}
 
 /* 变量值悬浮提示 */
 .var-tip {
