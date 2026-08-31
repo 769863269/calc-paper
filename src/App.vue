@@ -84,7 +84,7 @@
           <div class="guide-examples">
             <div class="guide-example">· 算式：<code>55+888+999</code> → <code>= 1,942</code></div>
             <div class="guide-example">· 变量：<code>tax=0.13</code>，下一行用 <code>1000*tax</code></div>
-            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Tab</code> 算式⇄备注 · <code>↑</code> 调历史 / 再按选行</div>
+            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Ctrl+Y</code> 重做 · <code>Tab</code> 算式⇄备注 · <code>↑</code> 调历史 / 再按选行</div>
           </div>
           <div class="guide-actions">
             <button class="modal-btn primary" @click="loadExample">载入示例</button>
@@ -233,10 +233,16 @@
                 <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
               </svg>
             </button>
-            <button class="tool-btn" @click="undo" v-tip="'撤销（Ctrl+Z）'">
+            <button class="tool-btn" @click="undo" :disabled="!undoStack.length" v-tip="'撤销（Ctrl+Z）'">
               <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="1 4 1 10 7 10" />
                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+            </button>
+            <button class="tool-btn" @click="redo" :disabled="!redoStack.length" v-tip="'重做（Ctrl+Y）'">
+              <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10" />
+                <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
               </svg>
             </button>
             <button class="tool-btn" @click="helpOpen = true" v-tip="'帮助'">
@@ -550,6 +556,7 @@
                 <tr><td><code>↑</code> / <code>↓</code></td><td>上 / 下移动一行</td></tr>
                 <tr><td><code>↑</code>（底部输入框）</td><td>调出最近一条算过的式子；再按 ↑ 进入选择行模式</td></tr>
                 <tr><td><code>Ctrl+Z</code></td><td>撤销删除 / 清空（最多 50 步）</td></tr>
+                <tr><td><code>Ctrl+Y</code> / <code>Ctrl+Shift+Z</code></td><td>重做（撤销后反悔，恢复被撤销的那一步）</td></tr>
                 <tr><td>拖动 <code>⋮⋮</code></td><td>调整算式行的顺序</td></tr>
                 <tr><td>标签 ✎ / 双击标签</td><td>重命名稿纸（回车确认，Esc 取消）</td></tr>
                               </tbody>
@@ -819,8 +826,11 @@ function loadExample() {
 // 帮助
 const helpOpen = ref(false)
 
-// 撤销栈（恢复完整 UI 状态：稿纸数据 + 底部输入框内容 + 当前焦点行 + 最新计算行）
+// 撤销/重做栈（恢复完整 UI 状态：稿纸数据 + 底部输入框内容 + 当前焦点行 + 最新计算行）
+// 写法：每次改动前把「当前态」压入 undoStack；撤销时把「当前态」压入 redoStack 再回到上一态；
+// 重做则反向搬回。两个栈互为镜像，因此 redoStack 长度天然 ≤ undoStack 上限，无需再单独限长。
 const undoStack = ref([])
+const redoStack = ref([])
 const MAX_UNDO = 50
 const MAX_SNAP_SIZE = 2 * 1024 * 1024 // 单份快照超 2MB 不压栈，防超大稿纸内存暴涨
 function snapshot() {
@@ -830,6 +840,16 @@ function snapshot() {
     quickExpr: quickExpr.value,
     focusedLine: focusedLine.value,
     latestLineIdx: latestLineIdx.value
+  }
+}
+// 序列化当前态；超限或失败返回 null（表示这一帧不入栈，宁可少一步也不撑爆内存）
+function serializeSnapshot() {
+  try {
+    const snap = JSON.stringify(snapshot())
+    return snap.length > MAX_SNAP_SIZE ? null : snap
+  } catch (e) {
+    console.warn('[calc-paper] 快照失败：', e)
+    return null
   }
 }
 function applySnapshot(snap) {
@@ -848,19 +868,30 @@ function applySnapshot(snap) {
   completion.value = null
   editingIndex.value = -1
 }
+// 任何「新操作」前调用：压入撤销栈，同时清空重做栈
+// ——已撤销又产生新分支时，旧的重做路径不再成立（与常见编辑器一致）
 function pushUndo() {
-  try {
-    const snap = JSON.stringify(snapshot())
-    if (snap.length > MAX_SNAP_SIZE) return
-    undoStack.value.push(snap)
-    if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
-  } catch (e) { console.warn('[calc-paper] 撤销快照失败：', e) }
+  const snap = serializeSnapshot()
+  if (!snap) return
+  undoStack.value.push(snap)
+  if (undoStack.value.length > MAX_UNDO) undoStack.value.shift()
+  redoStack.value = []
 }
 function undo() {
   if (!undoStack.value.length) { toast('没有可撤销的操作'); return }
+  const cur = serializeSnapshot()
+  if (cur) redoStack.value.push(cur) // 当前态存入重做栈，供 Ctrl+Y 取回
   applySnapshot(JSON.parse(undoStack.value.pop()))
   rebuildScope() // 撤销后变量作用域需同步重算
   toast('已撤销')
+}
+function redo() {
+  if (!redoStack.value.length) { toast('没有可重做的操作'); return }
+  const cur = serializeSnapshot()
+  if (cur) undoStack.value.push(cur) // 当前态存回撤销栈，可继续 Ctrl+Z
+  applySnapshot(JSON.parse(redoStack.value.pop()))
+  rebuildScope()
+  toast('已重做')
 }
 
 // ---------- 自定义确认 ----------
@@ -1974,11 +2005,14 @@ function onGlobalKeydown(e) {
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
   }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-    const tag = document.activeElement?.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return
-    e.preventDefault()
-    undo()
+  // 撤销 / 重做：Ctrl+Z、Ctrl+Shift+Z、Ctrl+Y（macOS 上 Cmd 同样生效）
+  // 焦点在输入框内时不拦截，交给浏览器原生的文本撤销，避免抢走输入体验
+  const inEditor = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA'
+  if ((e.ctrlKey || e.metaKey) && !inEditor) {
+    const k = e.key.toLowerCase()
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
+    if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); return }
+    if (k === 'y') { e.preventDefault(); redo(); return }
   }
 }
 
@@ -2550,9 +2584,11 @@ body {
   display: flex; align-items: center; justify-content: center;
   transition: background 0.15s, transform 0.1s, color 0.15s, box-shadow 0.15s;
 }
-.tool-btn:hover { background: var(--tab-bg); color: var(--accent); }
-.tool-btn:active { transform: scale(0.92); background: var(--accent); color: #fff; }
+.tool-btn:not(:disabled):hover { background: var(--tab-bg); color: var(--accent); }
+.tool-btn:not(:disabled):active { transform: scale(0.92); background: var(--accent); color: #fff; }
 .tool-btn.tool-on { background: var(--accent); color: #fff; }
+/* 撤销/重做栈为空时置灰；排除 rate-btn 以保留其加载中的 cursor: wait */
+.tool-btn:disabled:not(.rate-btn) { opacity: 0.32; cursor: default; }
 .i-18 { width: 18px; height: 18px; }
 .i-16 { width: 16px; height: 16px; }
 .i-22 { width: 22px; height: 22px; }
