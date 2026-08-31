@@ -826,7 +826,9 @@ function loadExample() {
 // 帮助
 const helpOpen = ref(false)
 
-// 撤销/重做栈（恢复完整 UI 状态：稿纸数据 + 底部输入框内容 + 当前焦点行 + 最新计算行）
+// 撤销/重做栈（只聚焦数据：稿纸内容 + 当前稿纸标签；刻意不含 quickExpr / focusedLine / latestLineIdx 等界面状态）
+// 理由：输入框里未提交的内容、行高亮属于「正在进行的界面操作」，若被快照回退会打断用户；
+// 撤销/重做只管数据本身，界面保持现状（仅做越界钳制，见 applySnapshot）。
 // 写法：每次改动前把「当前态」压入 undoStack；撤销时把「当前态」压入 redoStack 再回到上一态；
 // 重做则反向搬回。两个栈互为镜像，因此 redoStack 长度天然 ≤ undoStack 上限，无需再单独限长。
 const undoStack = ref([])
@@ -836,10 +838,7 @@ const MAX_SNAP_SIZE = 2 * 1024 * 1024 // 单份快照超 2MB 不压栈，防超�
 function snapshot() {
   return {
     sheets: sheets.value,
-    activeSheetIndex: activeSheetIndex.value,
-    quickExpr: quickExpr.value,
-    focusedLine: focusedLine.value,
-    latestLineIdx: latestLineIdx.value
+    activeSheetIndex: activeSheetIndex.value
   }
 }
 // 序列化当前态；超限或失败返回 null（表示这一帧不入栈，宁可少一步也不撑爆内存）
@@ -855,12 +854,12 @@ function serializeSnapshot() {
 function applySnapshot(snap) {
   sheets.value = snap.sheets
   activeSheetIndex.value = snap.activeSheetIndex
-  quickExpr.value = snap.quickExpr
   rebuildScope()
-  // 索引越界保护：被删行/切换稿纸后，原索引可能失效
+  // 界面状态不动（输入框内容、行高亮保持用户现状）；仅做越界钳制：
+  // 撤销删行后，当前高亮行可能已不存在，钳到最后一个合法行，行数为 0 则清空
   const len = currentSheet.value.lines.length
-  focusedLine.value = snap.focusedLine >= 0 && snap.focusedLine < len ? snap.focusedLine : -1
-  latestLineIdx.value = snap.latestLineIdx >= 0 && snap.latestLineIdx < len ? snap.latestLineIdx : -1
+  if (focusedLine.value >= len) focusedLine.value = len > 0 ? len - 1 : -1
+  if (latestLineIdx.value >= len) latestLineIdx.value = len > 0 ? len - 1 : -1
   // 浮层状态一并清掉（可能挂在已删行上）
   closeMenus()
   errPopover.value = { ...errPopover.value, show: false }
@@ -881,16 +880,14 @@ function undo() {
   if (!undoStack.value.length) { toast('没有可撤销的操作'); return }
   const cur = serializeSnapshot()
   if (cur) redoStack.value.push(cur) // 当前态存入重做栈，供 Ctrl+Y 取回
-  applySnapshot(JSON.parse(undoStack.value.pop()))
-  rebuildScope() // 撤销后变量作用域需同步重算
+  applySnapshot(JSON.parse(undoStack.value.pop())) // 内含 rebuildScope
   toast('已撤销')
 }
 function redo() {
   if (!redoStack.value.length) { toast('没有可重做的操作'); return }
   const cur = serializeSnapshot()
   if (cur) undoStack.value.push(cur) // 当前态存回撤销栈，可继续 Ctrl+Z
-  applySnapshot(JSON.parse(redoStack.value.pop()))
-  rebuildScope()
+  applySnapshot(JSON.parse(redoStack.value.pop())) // 内含 rebuildScope
   toast('已重做')
 }
 
