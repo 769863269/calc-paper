@@ -1,24 +1,16 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import fs from 'node:fs'
-import path from 'node:path'
-
-// 构建时写入 SW 缓存版本文件：每次发布用时间戳生成唯一版本，
-// 旧缓存据此自动失效（见 public/sw.js）。避免手动维护版本号漏改导致用户停留在旧版。
-function swVersionPlugin() {
-  return {
-    name: 'sw-version',
-    buildStart() {
-      const version = new Date().toISOString().replace(/[:.]/g, '-')
-      const file = path.resolve(__dirname, 'public/sw-version.json')
-      fs.writeFileSync(file, JSON.stringify({ version }), 'utf-8')
-    },
-  }
-}
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [vue(), swVersionPlugin()],
+  plugins: [vue()],
+  // 构建期注入唯一版本号：SW 注册 URL 携带 ?_v=<buildId>，缓存名随之变化，
+  // 新发布自动失效旧缓存（见 public/sw.js）。
+  // 相比构建时写 public/sw-version.json 文件，此方案无文件写入，
+  // 规避本机 safe-delete 拦截写操作导致的构建失败，也无需额外网络请求取版本号。
+  define: {
+    __BUILD_VERSION__: JSON.stringify(Date.now()),
+  },
   // 相对路径，方便部署到任意静态托管（GitHub Pages / 子目录 / 本地 file 等）
   base: './',
   clearScreen: false,

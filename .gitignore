@@ -10,6 +10,3 @@ npm-debug.log*
 
 # Vite 临时文件
 vite.config.js.timestamp-*.*
-
-# SW 构建期生成的缓存版本文件（由 vite 构建时写入，非源码）
-public/sw-version.json
