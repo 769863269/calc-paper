@@ -105,6 +105,7 @@
             class="calc-row"
             :class="{ focused: focusedLine === lIdx, latest: latestLineIdx === lIdx, dragging: dragState.from === lIdx, pulse: line.pulse, shake: line.shake, 'drop-above': dragState.to === lIdx && dragState.pos === 'above', 'drop-below': dragState.to === lIdx && dragState.pos === 'below' }"
             :data-id="line.id"
+            :data-lIdx="lIdx"
             :ref="(el) => setRowRef(el, line.id)"
             @click="onRowClick(lIdx, $event)"
             @contextmenu.prevent="openRowMenu(lIdx, $event)"
@@ -446,7 +447,7 @@
 
     <!-- 菜单遮罩 -->
     <!-- 行右键菜单 -->
-    <div v-if="rowMenu.show" class="popover row-menu" :style="rowMenu.pos">
+    <div v-if="rowMenu.show" class="popover row-menu" :style="rowMenu.pos" @contextmenu.prevent.stop>
       <button class="pop-item" :disabled="rowMenu.lIdx <= 0" @click="rowMenuMove(-1)">
         <span class="pop-label">上移</span>
       </button>
@@ -464,7 +465,7 @@
       <button class="pop-item" @click="rowMenuClear"><span class="pop-label">清空此行</span></button>
       <button class="pop-item danger" @click="rowMenuDelete"><span class="pop-label">删除此行</span></button>
     </div>
-    <div v-if="rowMenu.show" class="popover-mask" @click="closeMenus"></div>
+    <!-- 行菜单不再用全屏遮罩：遮罩会挡住行，导致第二次右键打到遮罩上弹出浏览器原生菜单。改为全局 contextmenu/mousedown 拦截（见 onWinCtx / onWinMouseDown） -->
     <div v-if="copyMenu" class="popover-mask" @click="closeMenus"></div>
 
     <!-- 错误详情浮层（点击"公式错误"徽标展开） -->
@@ -1621,6 +1622,31 @@ function openRowMenu(lIdx, e) {
   rowMenu.value = { show: true, lIdx, pos: { left: `${x}px`, top: `${y}px` } }
 }
 function closeRowMenu() { rowMenu.value = { ...rowMenu.value, show: false } }
+// 全局拦截：菜单打开期间，任何右键都不该弹出浏览器原生菜单。
+// 捕获阶段先于行自身 @contextmenu 处理，逻辑：
+//  - 点在菜单内 → 保持
+//  - 点在某行 → 移动到该行重新打开（一次右键即可换目标行）
+//  - 点在其他位置 → 关闭
+function onWinCtx(e) {
+  if (!rowMenu.value.show) return
+  e.preventDefault()
+  const t = e.target
+  if (t.closest && t.closest('.row-menu')) return
+  const rowEl = t.closest && t.closest('.calc-row')
+  if (rowEl && rowEl.dataset && rowEl.dataset.lIdx != null) {
+    openRowMenu(Number(rowEl.dataset.lIdx), e)
+    return
+  }
+  closeRowMenu()
+}
+// 替代原遮罩的左键关闭：菜单外按下即关闭（菜单内的点击由各按钮自行关闭）
+// 仅响应左键（button 0），右键交给 onWinCtx 处理，否则右键的 mousedown 会先关掉菜单、导致无法"右键另一行即移动菜单"
+function onWinMouseDown(e) {
+  if (e.button !== 0) return
+  if (rowMenu.value.show && !(e.target.closest && e.target.closest('.row-menu'))) {
+    closeRowMenu()
+  }
+}
 // 滚动 / 尺寸变化：菜单是 fixed 定位，不关会飘到错误位置
 function onWindowScroll() { if (rowMenu.value.show) closeRowMenu() }
 // 上移 / 下移：dir 为 -1 或 1
@@ -2310,6 +2336,9 @@ onMounted(() => {
   window.addEventListener('scroll', onWindowScroll, true)
   window.addEventListener('resize', onWindowScroll)
   window.addEventListener('pointerdown', onRippleDown, true)
+  // 右键菜单打开期间全局拦截 contextmenu/mousedown，避免第二次右键弹出浏览器原生菜单，并支持右键另一行即移动菜单
+  window.addEventListener('contextmenu', onWinCtx, true)
+  window.addEventListener('mousedown', onWinMouseDown, true)
   // 标签栏：竖向滚轮转横向滚动（非 passive，才能 preventDefault）
   if (sheetTabs.value) sheetTabs.value.addEventListener('wheel', onTabsWheel, { passive: false })
   // 初始化所有已存在行的 textarea 高度（兜底）
@@ -2323,6 +2352,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', onWindowScroll)
   if (sheetTabs.value) sheetTabs.value.removeEventListener('wheel', onTabsWheel)
   window.removeEventListener('pointerdown', onRippleDown, true)
+  window.removeEventListener('contextmenu', onWinCtx, true)
+  window.removeEventListener('mousedown', onWinMouseDown, true)
   cancelAllRolls()
   cancelPendingCompute()
   clearInterval(rateTimer)
