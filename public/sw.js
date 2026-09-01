@@ -30,8 +30,11 @@ self.addEventListener('fetch', (e) => {
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        const copy = res.clone()
-        caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {})
+        // 仅缓存成功响应，避免把 404/500 等错误响应存进缓存，导致离线下返回坏页面
+        if (res && res.ok) {
+          const copy = res.clone()
+          caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {})
+        }
         return res
       })
       .catch(() => caches.match(e.request))

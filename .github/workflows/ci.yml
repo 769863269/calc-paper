@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# 部署到 GitHub Pages 所需权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
@@ -19,10 +25,35 @@ jobs:
         run: npm ci
       - name: 单元测试
         run: npm run test
-      - name: 生产构建
-        run: npm run build
+      - name: 清理并生产构建
+        # 本地因 safe-delete 拦截不能用 emptyOutDir，CI 侧直接 rm 保证产物干净（无旧 chunk 残留）
+        run: rm -rf dist && npm run build
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+
+  deploy:
+    needs: build-test
+    runs-on: ubuntu-latest
+    # 仅 main 分支的 push 才部署，PR 不触发部署
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
