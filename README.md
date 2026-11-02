@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + Vite + math.js** 的纯前端计算稿纸：多行实时演算、变量记忆、备注、本地持久化。无需 Rust、无需桌面打包，打开网页即用。
 
-当前版本 **0.5.0**（与 `package.json` 一致，界面标题处亦显示该版本号）。
+当前版本 **0.5.1**（与 `package.json` 一致，界面标题处亦显示该版本号）。
 
 ## 功能
 
@@ -57,7 +57,8 @@ npm run test         # 运行单元测试（Vitest）
 ```bash
 npm run build        # 产出 dist/（纯静态文件）
 npm run preview      # 本地预览构建产物
-npm run verify       # 三套真实浏览器回归（需先 build）
+npm run verify       # 七套真实浏览器回归（需先 build）
+npm run stress       # 大稿纸压力测试（需先 build；默认 200 行，可加 --rows=400 --sheets=5）
 ```
 
 ### 浏览器回归
@@ -75,6 +76,33 @@ npm run verify       # 三套真实浏览器回归（需先 build）
 | `verify-a11y.mjs` | 14 | 四个弹层的 `role`/`aria-modal`/名称、焦点移入与归还、`Tab` 双向循环、结果区 `aria-live` |
 
 浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这几套。
+
+### 压力测试
+
+回归套件里的数据都是 3~40 行的小稿纸，量级一上来就没人管了。`npm run stress` 专门补这一段：灌入真实体量的稿纸（默认 200 行，`--rows=400 --sheets=5` 可调），量四件事——**首屏、编辑延迟、滚动掉帧、单次长任务**，顺带用 40 层变量链检验「增量重算」在长级联下会不会算错。
+
+```bash
+npm run build && npm run stress -- --rows=400 --sheets=5
+```
+
+本机（Windows + 无头 Edge）实测基线，可直接当回归参照：
+
+| 体量 | 首屏到可读结果 | 改赋值行（40 层级联） | 改纯算式行 | 新增一行 | 单次最长长任务 | JS 堆 |
+|---|---|---|---|---|---|---|
+| 200 行 × 1 张 | 0.8~1.1s | 240~260ms | 215~240ms | 32~56ms | 63~259ms | 16~23MB |
+| 400 行 × 1 张 | 1.85s | 294ms | 239ms | 56ms | 111ms | 21MB |
+| 200 行 × 5 张 | 0.8~1.1s | 257~291ms | 230ms | 52~98ms | 244~815ms | 26MB |
+| 1000 行 × 1 张 | 5.3s | 483ms | 366ms | 125ms | 323ms | 57MB |
+
+几个结论：
+
+- **编辑延迟基本与行数无关**（220~300ms），因为 180ms 防抖固定，增量重算只重算受影响的行（200 行改一个赋值行，`computeLineBody` 只跑 72 次，`skipped` 另计）；
+- **首屏是唯一随行数超线性增长的部分**：200 行不到 1s，1000 行 5.3s——代价在 16k 个 DOM 节点上，不在计算上；
+- **≤400 行区间从容**，1000 行单张稿纸属于「一年不换纸」才会碰到的量级，实测首屏 5.3s、滚动偶发 100 次里 40 次掉帧，能忍但不好看；
+- 每行约 147B，5MB 配额约可存 3.5 万行，容量不是瓶颈；
+- 改动落盘是 `400ms 防抖 + 空闲回调`，实测 0.7~1.8s 完成；关页有 `beforeunload` 兜底，不会因为没等到空闲回调就丢。
+
+脚本刻意**不并进 `npm run verify`**：体量类断言对机器性能波动很敏感，混进功能回归会让「功能挂了」和「机器慢」变成一个红灯。CI 只跑功能回归，压力测试本地按需跑。
 
 `dist/` 可直接部署到任意静态托管：GitHub Pages、Vercel、Netlify、Nginx、对象存储……
 `vite.config.js` 中 `base` 已设为相对路径 `./`，放到子目录也能正常加载。
@@ -107,6 +135,8 @@ calc-paper/
 │  └─ icon-192.png / icon-512.png
 ├─ scripts/
 │  ├─ run-verify.mjs        # 一键回归：起预览服务 → 依次跑下面全部脚本 → 收尾
+│  ├─ run-stress.mjs       # 压力测试入口：起预览服务 → 跑 verify-stress（体量可调）
+│  ├─ verify-stress.mjs    # 大稿纸：首屏 / 编辑延迟 / 滚动掉帧 / 长任务 / 长级联正确性
 │  ├─ browser.mjs           # 浏览器定位与启动参数（Windows/Linux/macOS 通用）
 │  ├─ verify.mjs            # 真实浏览器回归：计算 / 弹层 / 拖拽 / 变量作用域 / 主题 / 持久化
 │  ├─ verify-export.mjs     # 导出回归：PNG 折行、PDF 分页与压缩
