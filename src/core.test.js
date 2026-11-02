@@ -3,7 +3,7 @@ import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
   parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall, parseDeps, depSignature,
-  needsSplitHint, HUGE_SHEET_ROWS
+  needsSplitHint, HUGE_SHEET_ROWS, scrollTarget
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -367,5 +367,30 @@ describe('needsSplitHint 超长稿纸提示', () => {
   })
   it('空稿纸永远不提示', () => {
     expect(needsSplitHint(0, new Set(), 'a')).toBe(false)
+  })
+})
+
+describe('scrollTarget 打开时滚到哪', () => {
+  it('有记录就回记录位置', () => {
+    expect(scrollTarget(500, 1000, true)).toBe(500)
+  })
+  it('记录越界（删过行变短）夹回到最大可滚距离', () => {
+    expect(scrollTarget(9999, 400, true)).toBe(400)
+  })
+  it('负数记录夹回 0', () => {
+    expect(scrollTarget(-20, 400, true)).toBe(0)
+  })
+  it('没有记录时长稿纸落到最后一行', () => {
+    expect(scrollTarget(undefined, 400, true)).toBe(400)
+  })
+  it('空稿纸（没有行）永远停在顶部', () => {
+    expect(scrollTarget(undefined, 400, false)).toBe(0)
+  })
+  it('容器还没布局好（max 非法）时不抛错也不乱跳', () => {
+    expect(scrollTarget(120, NaN, true)).toBe(0)
+    expect(scrollTarget(120, -50, true)).toBe(0)
+  })
+  it('记录是 0 时尊重用户位置（他在顶部看，就别拽到底部）', () => {
+    expect(scrollTarget(0, 400, true)).toBe(0)
   })
 })

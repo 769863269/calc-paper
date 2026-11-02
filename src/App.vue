@@ -80,7 +80,7 @@
 
       <!-- 演算列表 -->
       <div class="paper-wrap">
-      <div class="paper-body" :class="'paper-' + paperStyle" ref="paperBody">
+      <div class="paper-body" :class="'paper-' + paperStyle" ref="paperBody" @scroll.passive="touchScrollMemory">
         <!-- 超长稿纸提示：>500 行才出现，纯提示不拦操作 -->
         <div v-if="showSplitHint" class="split-hint" role="status">
           <span class="split-hint-text">
@@ -498,7 +498,7 @@ import {
   math, uid, newLine, trimZeros, formatResult, displayResult, nowTime,
   analyzeError, suggestFix, safeEval, lineFullText, uniqueSheetName,
   isVarDefLine, isValidVarName, isAssignExpr, wrapText, nextUpRecall,
-  parseDeps, depSignature, needsSplitHint, HUGE_SHEET_ROWS
+  parseDeps, depSignature, needsSplitHint, HUGE_SHEET_ROWS, scrollTarget
 } from './core.js'
 import { dialogDirective } from './a11y.js'
 
@@ -1128,6 +1128,89 @@ function locateRow(id) {
     const t = Math.min(Math.max(0, rowBottom - container.clientHeight), maxScroll())
     container.scrollTo({ top: t, behavior: 'smooth' })
   })
+}
+
+// ---------- 滚动位置记忆 ----------
+// 之前每次打开都停在第一行，而真正在算的那几行在最底下——等于每次进来都要往下找一遍。
+// 现在按稿纸 id 记住滚动位置：重开 / 切回原稿纸就回到原处；没有记录（首次打开、新建稿纸）
+// 直接落到最后一行，也就是用户实际在用的位置。存的只是像素值，不进备份 JSON。
+const SCROLL_KEY = 'calc_paper_scroll'
+const SCROLL_MAX_SHEETS = 20
+function readScrollMap() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SCROLL_KEY) || '{}')
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const out = {}
+    for (const k of Object.keys(raw)) if (Number.isFinite(raw[k])) out[k] = raw[k]
+    return out
+  } catch (e) { return {} } // 存坏了当没记过：最多回不到原位，不碰数据
+}
+const scrollMap = readScrollMap()
+let scrollSaveTimer = null
+let scrollDirty = false
+// 滚动事件一帧能来十几个，攒 1200ms 写一次盘。位置不是关键数据，丢了最多重开回到旧位置。
+function touchScrollMemory() {
+  if (!paperBody.value) return
+  scrollDirty = true
+  if (scrollSaveTimer) return
+  scrollSaveTimer = setTimeout(() => { scrollSaveTimer = null; saveScrollNow() }, 1200)
+}
+function saveScrollNow() {
+  if (scrollSaveTimer) { clearTimeout(scrollSaveTimer); scrollSaveTimer = null }
+  if (!scrollDirty) return
+  scrollDirty = false
+  const c = paperBody.value
+  const sh = currentSheet.value
+  if (!c || !sh) return
+  scrollMap[sh.id] = Math.round(c.scrollTop)
+  const keys = Object.keys(scrollMap)
+  while (keys.length > SCROLL_MAX_SHEETS) delete scrollMap[keys.shift()] // 只留最近 20 张
+  try { localStorage.setItem(SCROLL_KEY, JSON.stringify(scrollMap)) }
+  catch (e) { /* 存不下就只管本次会话，不值得为它弹提示 */ }
+}
+// 页签切后台/关闭时落盘：移动端切后台不一定触发 beforeunload
+function onVisibilitySaveScroll() {
+  if (document.visibilityState === 'hidden') saveScrollNow()
+}
+// 有记录回记录位置（夹回合法区间，删过行的稿纸会变短）；没记录落到最后一行
+function applyScrollMemory() {
+  const c = paperBody.value
+  const sh = currentSheet.value
+  if (!c || !sh) return
+  const max = Math.max(0, c.scrollHeight - c.clientHeight)
+  c.scrollTop = scrollTarget(scrollMap[sh.id], max, sh.lines.length > 0)
+}
+// 首帧的 scrollHeight 对长稿纸是估算的（content-visibility 用 120px 占位），一次对不准，
+// 布局稳定后再校一次。但校正前先看「视图是不是已经被人挪走了」——用户点了行、聚焦了输入框
+// （ensureRowVisible 会滚动），或者程序因为新增行滚到了底部，这时候再拉回启动位置就是抢滚动条。
+// 判据用「scrollTop 还是不是我上次设的值」：变了就说明这中间有别人动过，直接放手。
+// （一开始用 wheel/touchstart/keydown 做取消信号，结果聚焦滚动不经过这些事件，照样抢——
+//   verify.mjs 的拖拽用例就这么被打断的。）
+function restoreScrollAfterBoot() {
+  const sh = currentSheet.value
+  if (!sh || !sh.lines.length) return
+  const saved = scrollMap[sh.id]
+  let cancelled = false
+  const cancel = () => { cancelled = true }
+  const sig = { passive: true }
+  // 点行、聚焦输入框（ensureRowVisible 会滚动）、新增行滚动，都不经过 wheel/keydown，
+  // 所以必须连 pointerdown / focusin 一起听，否则会在用户操作途中把视图拽回去。
+  const events = ['wheel', 'touchstart', 'pointerdown', 'keydown', 'focusin']
+  events.forEach((e) => window.addEventListener(e, cancel, sig))
+  let applied = null
+  const apply = () => {
+    const c = paperBody.value
+    if (!c || cancelled) return
+    // 这中间有人动过滚动条：直接放手，别跟人抢
+    if (applied !== null && Math.abs(c.scrollTop - applied) > 4) { cancelled = true; return }
+    c.scrollTop = scrollTarget(saved, Math.max(0, c.scrollHeight - c.clientHeight), true)
+    applied = c.scrollTop
+  }
+  apply() // 首帧就到位，别让人先看见第一行再被拉走
+  laterScroll(() => {
+    apply()
+    events.forEach((e) => window.removeEventListener(e, cancel, sig))
+  }, 450)
 }
 
 // 行内输入框获得焦点：高亮当前行，并取消"最新计算行"高亮，避免两个高亮并存
@@ -1963,6 +2046,7 @@ function addSheet() {
 }
 function switchSheet(idx) {
   flushCompute() // 切走前结算，否则挂起的计算会算到已切换的稿纸上
+  saveScrollNow() // 切走前把这张稿纸的滚动位置落下来（防抖可能还没写）
   activeSheetIndex.value = idx
   focusedLine.value = -1
   latestLineIdx.value = -1
@@ -1972,6 +2056,9 @@ function switchSheet(idx) {
   errPopover.value = { ...errPopover.value, show: false }
   varTip.value = { ...varTip.value, show: false }
 }
+// 切稿纸 / 新建 / 删除 / 撤销都会改 activeSheetIndex，统一在这里把视图挪到该稿纸
+// 记得的位置，不必每个入口各写一遍（漏一个就会出现「切回去还停在上一张的滚动高度」）。
+watch(activeSheetIndex, () => { nextTick(applyScrollMemory) })
 function startRename(idx) {
   editingIndex.value = idx
   editingName.value = sheets.value[idx].name
@@ -2335,12 +2422,18 @@ onMounted(() => {
   // 标签栏：竖向滚轮转横向滚动（非 passive，才能 preventDefault）
   if (sheetTabs.value) sheetTabs.value.addEventListener('wheel', onTabsWheel, { passive: false })
   // 初始化所有已存在行的 textarea 高度（兜底）
-  nextTick(autosizeAllExpr)
+  nextTick(() => { autosizeAllExpr(); restoreScrollAfterBoot() })
+  // 关页/隐藏时把滚动位置落下来（移动端切后台不一定触发 beforeunload）
+  window.addEventListener('beforeunload', saveScrollNow)
+  document.addEventListener('visibilitychange', onVisibilitySaveScroll)
 })
 onUnmounted(() => {
+  saveScrollNow()
+  document.removeEventListener('visibilitychange', onVisibilitySaveScroll)
   window.removeEventListener('keydown', onGlobalKeydown)
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('beforeunload', flushSave)
+  window.removeEventListener('beforeunload', saveScrollNow)
   window.removeEventListener('scroll', onWindowScroll, true)
   window.removeEventListener('resize', onWindowScroll)
   if (sheetTabs.value) sheetTabs.value.removeEventListener('wheel', onTabsWheel)

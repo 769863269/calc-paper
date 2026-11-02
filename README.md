@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + Vite + math.js** 的纯前端计算稿纸：多行实时演算、变量记忆、备注、本地持久化。无需 Rust、无需桌面打包，打开网页即用。
 
-当前版本 **0.5.2**（与 `package.json` 一致，界面标题处亦显示该版本号）。
+当前版本 **0.5.3**（与 `package.json` 一致，界面标题处亦显示该版本号）。
 
 ## 功能
 
@@ -37,6 +37,7 @@
 - **空闲时段写盘**：数据保存先做 400ms 防抖，再交给 `requestIdleCallback`（2s 超时兜底），序列化与写 localStorage 不占用输入关键帧；关闭页面前强制落盘，`pulse`/`shake` 这类动画状态不写进存储
 - **输入计算防抖**：连续输入时计算延迟 180ms，补全与输入框高度自适应保持即时，不影响打字手感
 - **长稿纸渲染优化**：超过 120 行时启用 `content-visibility: auto`，浏览器跳过视口外行的渲染与布局
+- **打开就在上次的位置**：按稿纸记住滚动位置，重开 / 刷新回到原处；首次打开（没有记录）直接落到**最后一行**而不是第一行；切稿纸时各回各的位置。只记像素、不入备份 JSON，稿纸变短会自动夹回合法范围
 - **超长稿纸提示**：单张稿纸超过 500 行时，列表上方出现一条提示（「已有 600 行，建议拆成多张稿纸」），可直接点「新建稿纸」拆纸或「不再提示」；按稿纸 id 记住偏好，**只提示、不拦截、不自动拆**
 - **无障碍**：四个弹层统一 `role="dialog"` / `aria-modal`，打开即把焦点移入、`Tab` 在弹层内循环、关闭后焦点归还触发按钮；结果区仅对当前行启用 `aria-live="polite"`，避免整屏朗读；遵循系统「减少动效」偏好（`prefers-reduced-motion`），开启后自动关闭滚动、涟漪等装饰动画
 
@@ -58,13 +59,13 @@ npm run test         # 运行单元测试（Vitest）
 ```bash
 npm run build        # 产出 dist/（纯静态文件）
 npm run preview      # 本地预览构建产物
-npm run verify       # 七套真实浏览器回归（需先 build）
+npm run verify       # 八套真实浏览器回归（需先 build）
 npm run stress       # 大稿纸压力测试（需先 build；默认 200 行，可加 --rows=400 --sheets=5）
 ```
 
 ### 浏览器回归
 
-`npm run verify` 会起 `vite preview`、等端口就绪，再依次跑 `scripts/` 下七套脚本，最后收尾关服务。全部基于 CDP（Chrome DevTools Protocol）+ Node 22 自带的 `WebSocket`，**不依赖 puppeteer / playwright**：
+`npm run verify` 会起 `vite preview`、等端口就绪，再依次跑 `scripts/` 下八套脚本，最后收尾关服务。全部基于 CDP（Chrome DevTools Protocol）+ Node 22 自带的 `WebSocket`，**不依赖 puppeteer / playwright**：
 
 | 脚本 | 项数 | 覆盖 |
 |---|---|---|
@@ -75,6 +76,7 @@ npm run stress       # 大稿纸压力测试（需先 build；默认 200 行，�
 | `verify-storage.mjs` | 10 | 注入 `QuotaExceededError`：降级删错误日志、未保存标记、配额满时仍能导出备份、恢复后摘标记 |
 | `verify-incremental.mjs` | 16 | 变量级联、同名覆盖顺序、自引用、删定义后下游报错、撤销；并断言「求值次数远小于行数」 |
 | `verify-a11y.mjs` | 14 | 四个弹层的 `role`/`aria-modal`/名称、焦点移入与归还、`Tab` 双向循环、结果区 `aria-live` |
+| `verify-scroll.mjs` | 12 | 打开/刷新/切稿纸的滚动记忆：首次进入落最后一行、原位还原、按稿纸各自记忆、稿纸变短后夹回 |
 
 浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这几套。
 
@@ -145,7 +147,8 @@ calc-paper/
 │  ├─ verify-backup.mjs     # 备份导出 → 改坏数据 → 恢复的完整闭环
 │  ├─ verify-storage.mjs    # 注入配额写满，验证降级与「未保存」标记
 │  ├─ verify-incremental.mjs# 增量重算：级联正确性 + 跳过率
-│  └─ verify-a11y.mjs       # 弹层 role/焦点/Tab 循环与结果区 aria-live
+│  ├─ verify-a11y.mjs       # 弹层 role/焦点/Tab 循环与结果区 aria-live
+│  └─ verify-scroll.mjs     # 打开/刷新/切稿纸的滚动位置记忆
 └─ src/
    ├─ main.js                # 应用入口、全局错误边界与上报、SW 注册
    ├─ core.js                # 计算核心：mathjs 实例 + 纯函数（与 Vue 解耦）

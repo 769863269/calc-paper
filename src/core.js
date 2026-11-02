@@ -358,3 +358,12 @@ export function needsSplitHint(lineCount, dismissedIds, sheetId) {
     : Array.isArray(dismissedIds) && dismissedIds.includes(sheetId)
   return !has
 }
+
+// 打开时该滚到哪：有记录回记录位置（夹回 [0, max]，删过行的稿纸会变短），
+// 没记录就落到最后一行——用户真正在用的是底部那几行，不是第一行。
+// 抽成纯函数是为了把「越界 / 负数 / 负数 max / 空稿纸」这些边界钉在单测里。
+export function scrollTarget(saved, max, hasLines) {
+  const limit = Number.isFinite(max) && max > 0 ? max : 0
+  if (Number.isFinite(saved)) return Math.min(Math.max(0, saved), limit)
+  return hasLines ? limit : 0
+}
