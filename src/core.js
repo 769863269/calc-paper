@@ -367,3 +367,20 @@ export function scrollTarget(saved, max, hasLines) {
   if (Number.isFinite(saved)) return Math.min(Math.max(0, saved), limit)
   return hasLines ? limit : 0
 }
+
+// PDF 分页：这一页该多高。breaks 是允许的切点（每行行首的 y）。
+// 原来按固定页高硬切，60 行稿纸必然切穿某一行（实测第 51 行 2206~2252 被 2240
+// 的页边界一分为二，下一行从半截字开始）。这里取「不超过页高的最后一个行首」，
+// 但要求它至少填满 40% 页高，否则会切出一堆只装两行的碎页。
+// 单行比整页还高时没有可用切点，退回硬切——不硬切就会切出无限多页。
+export function pickPageHeight(offset, pageH, cssH, breaks = []) {
+  const h = Math.min(pageH, cssH - offset)
+  if (offset + h >= cssH - 0.5) return h // 最后一页，剩多少装多少
+  const limit = offset + h
+  const floor = offset + pageH * 0.4
+  let best = -1
+  for (const b of breaks) {
+    if (b > floor && b <= limit && b > best) best = b
+  }
+  return best > 0 ? best - offset : h
+}

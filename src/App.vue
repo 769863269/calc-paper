@@ -375,6 +375,8 @@
         @draft="onVarDraft"
         @commit="onVarCommit"
         @copy="copyVarValue"
+        @focus="onVarFocus"
+        @blur="onVarBlur"
       />
 
     </div>
@@ -1616,13 +1618,22 @@ const copyMenu = ref(null) // { lIdx }
 const menuPos = ref({})
 // lineFullText 已抽取到 src/core.js
 
+// 「这一行可复制的结果」：『错误』是占位文案不是结果，不能复出去。
+// 行内 ⧉ 菜单与右键菜单原本各写一份判断，行内那份漏了这一条，于是复制错误行
+// 得到的是「错误」两个字。统一成这一个函数，两处都别再各写一遍。
+function resultForCopy(line) {
+  const v = line && line.result
+  return v && v !== '错误' ? v : ''
+}
+
 function openCopyMenu(lIdx, e) {
   selectRow(lIdx) // 点复制时当前行先呈选中高亮
   const line = currentSheet.value.lines[lIdx]
+  const res = resultForCopy(line)
   copyMenu.value = {
     lIdx,
     preview: {
-      result: line.result && line.result !== '错误' ? displayResult(line.result) : '（无结果）',
+      result: res ? displayResult(res) : '（无结果）',
       expr: line.expr.trim() ? line.expr : '（空算式）',
       line: lineFullText(line) || '（空行）'
     }
@@ -1642,7 +1653,7 @@ function copyRowAction(type) {
   if (!copyMenu.value) return
   const lIdx = copyMenu.value.lIdx
   const line = currentSheet.value.lines[lIdx]
-  const text = type === 'result' ? (line.result || '')
+  const text = type === 'result' ? resultForCopy(line)
     : type === 'expr' ? line.expr
     : lineFullText(line)
   closeMenus()
@@ -1695,7 +1706,11 @@ function onWinMouseDown(e) {
   }
 }
 // 滚动 / 尺寸变化：菜单是 fixed 定位，不关会飘到错误位置
-function onWindowScroll() { if (rowMenu.value.show) closeRowMenu() }
+function onWindowScroll() {
+  if (rowMenu.value.show) closeRowMenu()
+  // 变量浮层是 fixed 定位，跟着内容滚会飘在错的行上，一滚就收起
+  if (varTip.value.show) hideVarTip()
+}
 // 上移 / 下移：dir 为 -1 或 1
 function rowMenuMove(dir) {
   const lIdx = rowMenu.value.lIdx
@@ -1726,7 +1741,7 @@ function rowMenuCopy(type) {
   const lIdx = rowMenu.value.lIdx
   const line = currentSheet.value.lines[lIdx]
   closeRowMenu()
-  const text = type === 'result' ? (line.result && line.result !== '错误' ? line.result : '')
+  const text = type === 'result' ? resultForCopy(line)
     : type === 'expr' ? line.expr
     : lineFullText(line)
   if (!text) { toast('此行暂无内容'); return }
@@ -1801,7 +1816,14 @@ const varEntries = computed(() => {
 })
 
 // 当前正在编辑的变量名（输入期间保留用户输入，不被其他变量的联动重算覆盖）
+// 这个变量之前只声明、从未被赋值，注释描述的「跳过正在编辑的变量」其实一直没生效；
+// 现在由输入框的 focus/blur 真正维护它。
 let focusedVar = null
+function onVarFocus(name) { focusedVar = name }
+function onVarBlur(name) {
+  if (focusedVar === name) focusedVar = null
+  syncVarDrafts() // 失焦后把草稿同步回真实值，用户留下的非法中间态（如 "1+"）不该挂在面板上
+}
 
 // 变量草稿同步：始终与当前 raw（无千分位的真实值）保持一致，保证面板与稿纸联动一致；
 // 仅跳过正在编辑的变量，避免输入中途被覆盖。raw 不含千分位逗号，同步后不会造成"改值变回原值"
@@ -1818,6 +1840,21 @@ watch(varEntries, syncVarDrafts)
 watch(varPanelOpen, (open) => { if (open) { focusedVar = null; syncVarDrafts() } })
 
 let varTimers = {}
+// 变量面板的编辑会直接改定义行（甚至删掉别的稿纸里的同名行），必须能撤销；
+// 但 commitVar 由 240ms 防抖反复调用，逐次入栈会在连续输入时把 50 步栈灌满。
+// 所以按「变量名 + 1.2s 窗口」合并成一次编辑会话：同一变量连续输入只记一步。
+const VAR_EDIT_MERGE_MS = 1200
+let varEditSession = { name: null, at: 0 }
+function beginVarEdit(name) {
+  const now = Date.now()
+  if (varEditSession.name === name && now - varEditSession.at < VAR_EDIT_MERGE_MS) {
+    varEditSession.at = now
+    return
+  }
+  pushUndo()
+  varEditSession = { name, at: now }
+}
+function endVarEdit() { varEditSession = { name: null, at: 0 } }
 // isVarDefLine / isValidVarName 已抽取到 src/core.js
 function onVarDraft(name, e) {
   varDrafts[name] = e.target.value
@@ -1834,6 +1871,7 @@ function onVarCommit(name) {
     return
   }
   commitVar(name, varDrafts[name])
+  endVarEdit() // 回车/失焦算一次编辑结束，下一次输入重新记一步撤销
 }
 // 手动修改变量：更新其定义行（或新建一行），再全局重算所有稿纸
 function commitVar(name, raw) {
@@ -1854,6 +1892,19 @@ function commitVar(name, raw) {
     if (target) break
   }
   const expr = `${name} = ${trimmed}`
+  // 先算清这次要动什么，再决定要不要入撤销栈：值没变、也没有重复行要清的时候
+  // 直接返回，否则用户每敲一个字都会白记一步撤销，把真正的历史挤出 50 步栈。
+  let dupCount = 0
+  if (target) {
+    for (const sh of sheets.value) {
+      for (const ln of sh.lines) {
+        if (ln !== target && isVarDefLine(ln.expr, name)) dupCount++
+      }
+    }
+  }
+  const changed = target ? (target.expr !== expr || dupCount > 0) : true
+  if (!changed) return // 值没变、也没有重复行要清：什么都不用做，更不用全量重算
+  beginVarEdit(name) // 改数据之前入栈，撤销才能回到「改之前」
   if (target) {
     target.expr = expr
     // 清理同名变量的其他定义行（全局 varScope 共享，后定义覆盖前定义——多行重复会让面板与某行显示矛盾）
@@ -1867,6 +1918,11 @@ function commitVar(name, raw) {
     currentSheet.value.lines.push({ ...newLine(), expr })
   }
   rebuildScope()
+  // 删行必须说出来。这一步会动到别的稿纸，用户眼睛盯着变量面板，看不到背后少了一行，
+  // 只留一个「撤销」按钮把它变成可回滚的操作。
+  if (dupCount > 0) {
+    toast(`已合并 ${dupCount} 处同名定义`, { type: 'success', duration: 4000, action: { label: '撤销', run: undo } })
+  }
 }
 
 // 稿纸样式切换（白纸 / 横格 / 方格），持久化
@@ -1957,7 +2013,16 @@ async function onBackupFile(e) {
   )
   if (!ok) return
   pushUndo()
-  applyNormalizedState(norm)
+  try {
+    applyNormalizedState(norm)
+  } catch (err) {
+    // 归一化后理论上不会走到这里，但真走到了必须能退回去：applyNormalizedState 已经
+    // 替换过 sheets，直接返回会让界面停在半套数据上，所以用刚入栈的快照还原。
+    console.error('[calc-paper] 应用备份失败：', err)
+    undo()
+    toast('备份结构异常，已取消导入', { type: 'error' })
+    return
+  }
   flushSave() // 立刻落盘，别让用户以为恢复了却还在防抖队列里
   toast(`已恢复 ${norm.sheets.length} 张稿纸 / ${inRows} 行`, { type: 'success', duration: 2400 })
 }
@@ -1965,6 +2030,7 @@ async function onBackupFile(e) {
 // 导出 Markdown
 function exportMarkdown() {
   exportMenuOpen.value = false
+  flushCompute() // 结算挂起的计算：防抖还没跑完就导出会拿到上一次的结果，算式与结果错配
   const sh = currentSheet.value
   const lines = sh.lines.filter(l => l.expr.trim())
   const d = new Date()
@@ -1988,6 +2054,7 @@ function exportMarkdown() {
 // 导出：渲染细节在 src/export.js，这里只负责菜单状态、下载与提示
 function exportImage() {
   exportMenuOpen.value = false
+  flushCompute() // 同上：先结算再排版
   const paper = renderPaperCanvas({
     name: currentSheet.value.name,
     lines: currentSheet.value.lines,
@@ -2004,6 +2071,7 @@ function exportImage() {
 // 导出 PDF：超过一页高度就分页，不再把几十行硬压进一页
 function exportPdf() {
   exportMenuOpen.value = false
+  flushCompute() // 同上：先结算再排版（要写在异步 import 之前）
   import('jspdf').then(({ default: jsPDF }) => {
     const paper = renderPaperCanvas({
       name: currentSheet.value.name,
@@ -2011,8 +2079,9 @@ function exportPdf() {
       isDark: theme.value === 'dark'
     })
     if (!paper) { toast('导出 PDF 失败', { type: 'error' }); return }
-    const { canvas, cssW, cssH } = paper
-    const pages = sliceCanvasPages(canvas, cssW, cssH, PDF_PAGE_H)
+    const { canvas, cssW, cssH, breaks } = paper
+    // 传行首切点：不把一行拦腰切断（固定 1120px 硬切必然切穿某一行）
+    const pages = sliceCanvasPages(canvas, cssW, cssH, PDF_PAGE_H, breaks)
     if (!pages.length) { toast('导出 PDF 失败', { type: 'error' }); return }
     const pdf = new jsPDF({
       orientation: pages[0].cssW >= pages[0].cssH ? 'landscape' : 'portrait',
@@ -2039,6 +2108,7 @@ function openChart() {
 // ---------- 稿纸操作 ----------
 // uniqueSheetName 已抽取到 src/core.js
 function addSheet() {
+  pushUndo() // 与删除稿纸对齐：新建也能撤销
   const base = `稿纸${sheets.value.length + 1}`
   sheets.value.push({ id: uid(), name: uniqueSheetName(base, sheets.value.map(s => s.name)), lines: [] })
   activeSheetIndex.value = sheets.value.length - 1
@@ -2068,11 +2138,21 @@ function startRename(idx) {
   })
 }
 function commitRename() {
-  if (editingIndex.value >= 0) {
-    const n = editingName.value.trim()
-    if (n) sheets.value[editingIndex.value].name = n
-    editingIndex.value = -1
-  }
+  if (editingIndex.value < 0) return
+  const idx = editingIndex.value
+  const raw = editingName.value.trim()
+  editingIndex.value = -1
+  if (!raw) return
+  const sh = sheets.value[idx]
+  if (!sh || sh.name === raw) return // 名字没变：不留一步空撤销
+  // 新建/删除/拖拽/清空都能 Ctrl+Z，重命名不能就很不一致
+  pushUndo()
+  // 排除自己再判重。否则「稿纸1 改成 稿纸1」会被改成「稿纸1 (2)」，
+  // 而且两张同名稿纸导出时文件名会互相覆盖。
+  const others = sheets.value.filter((_, i) => i !== idx).map(s => s.name)
+  const finalName = uniqueSheetName(raw, others)
+  sh.name = finalName
+  if (finalName !== raw) toast(`已有同名稿纸，已改为「${finalName}」`, { type: 'info', duration: 2400 })
 }
 function cancelRename() {
   editingIndex.value = -1
@@ -2210,6 +2290,8 @@ function onGlobalKeydown(e) {
   }
   if (e.key === 'Escape') {
     if (rowMenu.value.show || copyMenu.value) { closeMenus(); return }
+    if (exportMenuOpen.value || styleMenuOpen.value) { exportMenuOpen.value = false; styleMenuOpen.value = false; return }
+    if (errPopover.value.show) { closeErrPopover(); return }
     if (varPanelOpen.value) { varPanelOpen.value = false; return }
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
@@ -2227,9 +2309,10 @@ function onGlobalKeydown(e) {
 }
 
 // 点击行外（含工具栏/空白/底部框）自动取消"选中行"高亮；
-// 行内、行内浮层（复制菜单/错误浮层）上的点击不清除
+// 行内、行内浮层（复制菜单/错误浮层）、确认弹层上的点击不清除
+// （弹层是 modal，点它不该改动背后的选中状态——漏了 .modal-mask 会让人以为选中丢了）
 function onDocClick(e) {
-  if (e.target.closest('.calc-row, .popover')) return
+  if (e.target.closest('.calc-row, .popover, .modal-mask')) return
   focusedLine.value = -1
   latestLineIdx.value = -1 // 底部添加行产生的"最新计算行"高亮也一并取消
 }
@@ -2313,12 +2396,38 @@ function saveState() {
     warnStorage('保存失败：' + e)
   }
 }
+// 本地数据解析失败时的原文留档：不能只是 console.warn 然后把空稿纸写回去——
+// 那样刷新一次原始数据就彻底没了，用户也没法自己捞。这里把原文留在内存里，
+// 启动后主动弹一个「下载原文」的动作，同时另存一份到 localStorage 兜底。
+let brokenRaw = null
+const BROKEN_KEY_PREFIX = 'calc_paper_state_broken_'
 function loadState() {
+  let raw = null
   try {
-    const raw = localStorage.getItem('calc_paper_state')
-    if (raw) return JSON.parse(raw)
-  } catch (e) { console.warn('[calc-paper] 读取本地数据失败：', e) }
-  return null
+    // 隐私模式下 localStorage 读取本身就可能抛错，单独兜一层
+    raw = localStorage.getItem('calc_paper_state')
+  } catch (e) {
+    console.warn('[calc-paper] 读取本地数据失败：', e)
+    return null
+  }
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch (e) {
+    console.warn('[calc-paper] 本地数据解析失败：', e)
+    brokenRaw = raw
+    try {
+      // 只留最近一份，避免坏一次攒一份把 5MB 配额吃光
+      const old = []
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i)
+        if (k && k.startsWith(BROKEN_KEY_PREFIX)) old.push(k)
+      }
+      old.forEach(k => localStorage.removeItem(k))
+      localStorage.setItem(BROKEN_KEY_PREFIX + Date.now(), raw)
+    } catch (_) { /* 配额满：内存里还有一份，至少能下载出来 */ }
+    return null
+  }
 }
 // 保存分两段等：400ms 防抖（避免每敲一个字就序列化整棵数据）+ 空闲调度（序列化与写盘
 // 都不占用输入的关键帧）。空闲回调带 2s 超时兜底，标签页被节流时也能按时落盘。
@@ -2352,23 +2461,39 @@ watch(decimalPlaces, () => { rebuildScope(); scheduleSave() })
 // 首次加载与「从备份恢复」共用这一个函数——两条路径各写一套的话，
 // 迟早会出现「从备份恢复少补了某个字段」这种只在特定场景暴露的脏状态。
 const PAPER_STYLE_KEYS = ['white', 'ruled', 'grid', 'yellow', 'green']
+// 外部数据（备份文件 / 本地存储）可能被手工改过，也可能来自旧版本，字段类型不一定是
+// 字符串。归一化这里是唯一一道关：下游 computeLine 直接 line.expr.trim()，模板也直接
+// .trim()/.length，一旦漏进数字或对象就抛 TypeError。而 applyNormalizedState 在模块
+// 顶层同步执行，一抛就把整个挂载打断 → 白屏，且坏数据随后被 watch 写回存储，刷新也
+// 救不回来。所以这里宁可把脏字段归空，也不能原样放行。
+// 数字收成字符串是有意的（expr: 123 等于常量算式，比丢掉更合理）；对象/数组/布尔
+// 没法和算式对上，一律归空。
+function asText(v) {
+  if (typeof v === 'string') return v
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  return ''
+}
+function asId(v) {
+  return typeof v === 'string' && v ? v : uid()
+}
 function normalizeState(raw) {
   if (!raw || typeof raw !== 'object') return null
   if (!Array.isArray(raw.sheets) || !raw.sheets.length) return null
   const sheetsOut = raw.sheets.map(sh => {
     const src = sh && typeof sh === 'object' ? sh : {}
     return {
-      id: src.id || uid(),
-      name: src.name || '稿纸',
+      id: asId(src.id),
+      name: asText(src.name) || '稿纸',
       lines: (Array.isArray(src.lines) ? src.lines : []).map(l => {
         const line = l && typeof l === 'object' ? l : {}
+        const result = asText(line.result)
         return {
-          id: line.id || uid(),
-          expr: line.expr || '',
-          result: line.result || '',
-          note: line.note || '',
-          time: line.time || (line.result ? nowTime() : ''),
-          errorMsg: line.errorMsg || '',
+          id: asId(line.id),
+          expr: asText(line.expr),
+          result,
+          note: asText(line.note),
+          time: asText(line.time) || (result ? nowTime() : ''),
+          errorMsg: asText(line.errorMsg),
           partial: !!line.partial,
           wasAssign: !!line.wasAssign,
           pulse: false,
@@ -2401,10 +2526,28 @@ function applyNormalizedState(norm) {
 // 同步加载本地数据：首帧即渲染真实数据（localStorage 读取是同步的）。
 // 若放在 onMounted 异步执行，首帧先渲染默认空行、数据到达后再替换，
 // transition-group 会把已有行当作"新插入"播放进入动画 → 刷新时整批行跳动闪烁。
-const boot = normalizeState(loadState())
+// 整段包在 try 里：这里位于模块顶层，任何异常都会让 app 挂载不出来（白屏），
+// 而白屏的用户连导出备份的入口都没有。宁可退化成空稿纸也要让应用起来。
+let boot = null
+try {
+  boot = normalizeState(loadState())
+} catch (e) {
+  console.error('[calc-paper] 本地数据无法解析，已按空稿纸启动：', e)
+}
 // 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
-if (boot) applyNormalizedState(boot) // 内含 rebuildScope
-else rebuildScope()                    // 没有本地数据时默认空稿纸也要算一遍
+if (boot) {
+  try {
+    applyNormalizedState(boot) // 内含 rebuildScope
+  } catch (e) {
+    // 归一化后仍失败说明数据结构里有更深的问题：退回默认空稿纸，保证应用能打开
+    console.error('[calc-paper] 恢复本地数据失败，已退回空稿纸：', e)
+    sheets.value = [{ id: uid(), name: '稿纸1', lines: [] }]
+    activeSheetIndex.value = 0
+    rebuildScope()
+  }
+} else {
+  rebuildScope() // 没有本地数据时默认空稿纸也要算一遍
+}
 onMounted(() => {
   // 暴露计算计数：回归脚本据此断言「增量重算真的跳过了求值」。
   // 只读引用，不提供任何写操作，页面外部改不到内部状态。
@@ -2426,6 +2569,17 @@ onMounted(() => {
   // 关页/隐藏时把滚动位置落下来（移动端切后台不一定触发 beforeunload）
   window.addEventListener('beforeunload', saveScrollNow)
   document.addEventListener('visibilitychange', onVisibilitySaveScroll)
+  // 本地数据坏了：明确告诉用户，并给一条真能救回原文的出口
+  if (brokenRaw) {
+    toast('本地数据损坏，已按空稿纸启动', {
+      type: 'error',
+      duration: 8000,
+      action: {
+        label: '下载原文',
+        run: () => downloadBlob(new Blob([brokenRaw], { type: 'application/json;charset=utf-8' }), 'calc-paper-broken.json')
+      }
+    })
+  }
 })
 onUnmounted(() => {
   saveScrollNow()
@@ -2457,10 +2611,13 @@ onUnmounted(() => {
 // 变量值悬浮提示（算式中引用已定义变量时，hover 显示当前值）
 const varTip = ref({ show: false, idx: -1, vars: [], pos: {} })
 let varTipTimer = null
-function showVarTip(lIdx, e) {
+// 接收 rect 而不是事件对象：调用方在 80ms 防抖之后才进来，那时事件派发早已结束，
+// 规范会把 e.currentTarget 置为 null（原实现每次 hover 都抛 TypeError，浮层从不出现）。
+function showVarTip(lIdx, rect) {
   const sh = currentSheet.value
   const vars = varScope
   const line = sh.lines[lIdx]
+  if (!line) { hideVarTip(); return }
   const tokens = (line.expr.match(/[a-zA-Z_][a-zA-Z0-9_]*/g) || [])
   const seen = new Set()
   const list = []
@@ -2472,16 +2629,18 @@ function showVarTip(lIdx, e) {
     list.push({ name, value: displayResult(String(vars[name])) })
   }
   if (!list.length) { hideVarTip(); return }
-  const r = e.currentTarget.getBoundingClientRect()
+  // 靠右的行会把浮层推出屏幕，按视口宽度夹一下（预估卡片宽度 240px）
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 248))
   varTip.value = {
     show: true, idx: lIdx, vars: list,
-    pos: { left: `${r.left}px`, top: `${r.bottom + 6}px` }
+    pos: { left: `${left}px`, top: `${rect.bottom + 6}px` }
   }
 }
 function onExprHover(lIdx, e) {
+  const rect = e.currentTarget.getBoundingClientRect() // 必须在定时器之前取，之后 currentTarget 就没了
   // 防抖：快速划过整列行时不重复跑正则+遍历
   if (varTipTimer) clearTimeout(varTipTimer)
-  varTipTimer = setTimeout(() => { showVarTip(lIdx, e) }, 80)
+  varTipTimer = setTimeout(() => { showVarTip(lIdx, rect) }, 80)
 }
 function hideVarTip() {
   if (varTipTimer) { clearTimeout(varTipTimer); varTipTimer = null }

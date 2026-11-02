@@ -1,7 +1,7 @@
 // 稿纸导出：把当前稿纸排成一张 canvas（PNG / PDF 共用），以及按页切图。
 // 本模块只依赖 core.js 的纯函数与 DOM canvas，不引用任何 Vue 状态，
 // 调用方把「稿纸名 / 行数组 / 是否暗色」传进来即可。
-import { wrapText, displayResult } from './core.js'
+import { wrapText, displayResult, pickPageHeight } from './core.js'
 
 export const EXPORT_W = 720
 export const EXPORT_SCALE = 2
@@ -63,7 +63,10 @@ function layout(lines) {
     y += h + ROW_GAP
   }
   const H = (rows.length ? y - ROW_GAP : y + 20) + PAD_BOTTOM
-  return { rows, H }
+  // 可用的分页落点：每行开头（第 2 行起）。切在行首而不是行尾，是为了让行间那条
+  // 分隔线完整留在上一页，不会出现「半根线掉到下一页顶部」。
+  const breaks = rows.slice(1).map((r) => r.y)
+  return { rows, H, breaks }
 }
 
 function roundRect(c, x, y, w, h, r) {
@@ -79,14 +82,14 @@ function roundRect(c, x, y, w, h, r) {
 /**
  * 渲染稿纸为 canvas
  * @param {{ name: string, lines: Array, isDark: boolean, date?: Date }} opts
- * @returns {{ canvas: HTMLCanvasElement, cssW: number, cssH: number } | null}
+ * @returns {{ canvas: HTMLCanvasElement, cssW: number, cssH: number, breaks: number[] } | null}
  */
 export function renderPaperCanvas({ name, lines, isDark, date }) {
   const list = (lines || []).filter((l) => (l.expr || '').trim())
   const p = palette(!!isDark)
   const plan = layout(list)
   if (!plan) return null
-  const { rows, H } = plan
+  const { rows, H, breaks } = plan
 
   const cv = document.createElement('canvas')
   cv.width = EXPORT_W * EXPORT_SCALE
@@ -144,19 +147,25 @@ export function renderPaperCanvas({ name, lines, isDark, date }) {
     c.font = NOTE_STACK
     c.fillText('（暂无算式）', PAD_X, PAD_TOP)
   }
-  return { canvas: cv, cssW: EXPORT_W, cssH: H }
+  return { canvas: cv, cssW: EXPORT_W, cssH: H, breaks }
 }
 
 /**
  * 把整张 canvas 按页高切成若干块（PDF 分页用）。
  * jsPDF 的 addImage 不支持源矩形裁剪，只能先切到临时 canvas 再逐页贴。
+ * breaks 是允许的切点（各行行首的 y）。给了就在不超页高的前提下取最靠后的那个，
+ * 从而不把一行拦腰切断——之前按固定 1120px 硬切，60 行稿纸必然会切穿某一行
+ * （实测第 51 行 2206~2252 被 2240 的页边界一分为二）。
+ * 单行比整页还高的极端情况没有合适切点，退回硬切，否则会切出无限多页。
  * @returns {Array<{ canvas: HTMLCanvasElement, cssW: number, cssH: number }>}
  */
-export function sliceCanvasPages(canvas, cssW, cssH, pageH = PDF_PAGE_H) {
+export function sliceCanvasPages(canvas, cssW, cssH, pageH = PDF_PAGE_H, breaks = []) {
   const pages = []
   let offset = 0
   while (offset < cssH - 0.5) {
-    const h = Math.min(pageH, cssH - offset)
+    // 切点选择逻辑在 core.pickPageHeight（纯函数，边界有单测）：
+    // 优先切在行首，避免把一行拦腰切断
+    const h = pickPageHeight(offset, pageH, cssH, breaks)
     const slice = document.createElement('canvas')
     slice.width = canvas.width
     slice.height = Math.max(1, Math.round(h * EXPORT_SCALE))

@@ -3,7 +3,7 @@ import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
   parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall, parseDeps, depSignature,
-  needsSplitHint, HUGE_SHEET_ROWS, scrollTarget
+  needsSplitHint, HUGE_SHEET_ROWS, scrollTarget, pickPageHeight
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -392,5 +392,70 @@ describe('scrollTarget 打开时滚到哪', () => {
   })
   it('记录是 0 时尊重用户位置（他在顶部看，就别拽到底部）', () => {
     expect(scrollTarget(0, 400, true)).toBe(0)
+  })
+})
+
+describe('pickPageHeight PDF 分页不切断行', () => {
+  // 与 export.js 的真实排版参数保持一致：行高 22、行间距 12、首行从 64 开始
+  const ROW_H = 22, GAP = 12, PAD_TOP = 64, PAGE = 1120
+  const buildBreaks = (n) => {
+    const breaks = []
+    let y = PAD_TOP
+    for (let i = 0; i < n; i++) {
+      y += ROW_H + GAP
+      breaks.push(y)
+    }
+    return { breaks, cssH: y + 36 }
+  }
+
+  it('切点落在行首，不落在行中间', () => {
+    const { breaks, cssH } = buildBreaks(60)
+    const h = pickPageHeight(0, PAGE, cssH, breaks)
+    expect(breaks).toContain(h)
+  })
+
+  it('每页高度都不超过页高', () => {
+    const { breaks, cssH } = buildBreaks(200)
+    let offset = 0
+    for (let guard = 0; guard < 100; guard++) {
+      const h = pickPageHeight(offset, PAGE, cssH, breaks)
+      expect(h).toBeLessThanOrEqual(PAGE)
+      offset += h
+      if (offset >= cssH - 0.5) break
+    }
+    expect(offset).toBeCloseTo(cssH, 1)
+  })
+
+  it('60 行稿纸每一页的边界都对齐行首（旧的固定 1120px 硬切会切断第 51 行）', () => {
+    const { breaks, cssH } = buildBreaks(60)
+    expect(cssH).toBeGreaterThan(PAGE) // 确实需要分页
+    let offset = 0
+    const bounds = []
+    for (let guard = 0; guard < 100; guard++) {
+      const h = pickPageHeight(offset, PAGE, cssH, breaks)
+      offset += h
+      bounds.push(offset)
+      if (offset >= cssH - 0.5) break
+    }
+    // 除最后一页外，所有页边界都必须是某个行首
+    for (const b of bounds.slice(0, -1)) expect(breaks).toContain(b)
+  })
+
+  it('最后一页装下剩余内容，不产生空页', () => {
+    const { breaks, cssH } = buildBreaks(10)
+    expect(pickPageHeight(0, PAGE, cssH, breaks)).toBe(cssH)
+  })
+
+  it('单行比整页还高时退回硬切，不会死循环', () => {
+    // 只有一个切点在页高之外
+    expect(pickPageHeight(0, PAGE, 5000, [4000])).toBe(PAGE)
+  })
+
+  it('没有切点时按页高硬切', () => {
+    expect(pickPageHeight(0, PAGE, 5000, [])).toBe(PAGE)
+  })
+
+  it('切点太靠前（不足 40% 页高）时宁可硬切，不切碎页', () => {
+    expect(pickPageHeight(0, PAGE, 5000, [100])).toBe(PAGE)
   })
 })

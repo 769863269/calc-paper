@@ -24,17 +24,17 @@
           <svg v-if="points.length" :viewBox="svg.viewBox" class="chart-svg" preserveAspectRatio="xMidYMid meet">
             <!-- 网格 + 坐标轴 -->
             <line v-for="(g, i) in svg.gridY" :key="'gy' + i" :x1="g.x1" :y1="g.y1" :x2="g.x2" :y2="g.y2" class="chart-grid" />
-            <line :x1="svg.axis.x" :y1="svg.axis.y1" :x2="svg.axis.x" :y2="svg.axis.y2" class="chart-axis" />
-            <line :x1="svg.axis.x" :y1="svg.axis.y2" :x2="svg.axis.x2" :y2="svg.axis.y2" class="chart-axis" />
+            <line :x1="svg.axis.x" :y1="svg.axis.top" :x2="svg.axis.x" :y2="svg.axis.bottom" class="chart-axis" />
+            <line :x1="svg.axis.x" :y1="svg.axis.zero" :x2="svg.axis.x2" :y2="svg.axis.zero" class="chart-axis" />
             <!-- 柱状 -->
             <template v-if="type === 'bar'">
               <rect
                 v-for="(p, i) in points"
                 :key="'bar' + i"
                 :x="p.bx"
-                :y="p.y"
+                :y="p.barY"
                 :width="p.bw"
-                :height="svg.plotH - p.y + svg.padT"
+                :height="p.barH"
                 rx="3"
                 class="chart-bar"
               />
@@ -44,10 +44,10 @@
               <polyline :points="points.map(p => p.x + ',' + p.y).join(' ')" class="chart-line" />
               <circle v-for="(p, i) in points" :key="'pt' + i" :cx="p.x" :cy="p.y" r="3.5" class="chart-dot" />
             </template>
-            <!-- 数值标签 -->
-            <text v-for="(p, i) in points" :key="'lb' + i" :x="p.x" :y="p.y - 8" class="chart-val">{{ p.label }}</text>
+            <!-- 数值标签：负值放到柱体下方，避免压在柱子里 -->
+            <text v-for="(p, i) in points" :key="'lb' + i" :x="p.x" :y="p.labelY" class="chart-val">{{ p.label }}</text>
             <!-- X 轴标签 -->
-            <text v-for="(p, i) in points" :key="'xl' + i" :x="p.x" :y="svg.axis.y2 + 16" class="chart-xlabel">{{ p.name }}</text>
+            <text v-for="(p, i) in points" :key="'xl' + i" :x="p.x" :y="svg.labelY" class="chart-xlabel">{{ p.name }}</text>
           </svg>
           <p v-else class="chart-empty">输入数据后自动出图</p>
         </div>
@@ -77,15 +77,25 @@ const svg = computed(() => {
   const W = 560, H = 300, padL = 44, padR = 24, padT = 20, padB = 40
   const plotW = W - padL - padR
   const plotH = H - padT - padB
-  const maxV = Math.max(1, ...d.map((x) => x.value))
+  // 刻度范围必须包含 0：柱状图以 0 为基线，否则负值柱会画反（原来柱底固定在图底，
+  // 于是 -5,-10,3 里最低那根高度为 0、完全看不见）。
+  const maxV = Math.max(0, ...d.map((x) => x.value))
   const minV = Math.min(0, ...d.map((x) => x.value))
   const range = maxV - minV || 1
   const yOf = (v) => padT + plotH * (1 - (v - minV) / range)
+  const zeroY = yOf(0) // 0 所在的高度，也就是柱子的基线
   const points = d.map((x, i) => {
     const xv = d.length === 1 ? padL + plotW / 2 : padL + plotW * i / (d.length - 1)
     const yv = yOf(x.value)
     const bw = d.length > 1 ? Math.min(40, plotW / d.length * 0.6) : 40
-    return { name: x.name, label: String(x.value), x: xv, y: yv, bw, bx: xv - bw / 2 }
+    const top = Math.min(yv, zeroY)
+    // 值为 0 时柱高为 0，给 1px 让「有这么一根」还能看出来
+    const h = Math.max(1, Math.abs(yv - zeroY))
+    return {
+      name: x.name, label: String(x.value), x: xv, y: yv, bw, bx: xv - bw / 2,
+      barY: top, barH: h,
+      labelY: x.value < 0 ? yv + 14 : top - 8
+    }
   })
   const gridY = []
   const ticks = 4
@@ -96,7 +106,10 @@ const svg = computed(() => {
     viewBox: `0 0 ${W} ${H}`,
     plotH,
     padT,
-    axis: { x: padL, y1: padT, y2: padT + plotH, x2: W - padR },
+    // zero 是横轴（0 基线）的位置，bottom 是绘图区底边：有负值时两者不再重合，
+    // 横轴跟着 0 走，X 轴标签仍固定贴在底边，不会挤进图里
+    axis: { x: padL, top: padT, bottom: padT + plotH, zero: zeroY, x2: W - padR },
+    labelY: padT + plotH + 16,
     gridY,
     points
   }

@@ -9,7 +9,7 @@ const PORT = Number(process.env.VERIFY_PREVIEW_PORT || 4173)
 const URL = `http://127.0.0.1:${PORT}/`
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const VITE_BIN = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js')
-const SCRIPTS = ['verify-upkey.mjs', 'verify.mjs', 'verify-export.mjs', 'verify-backup.mjs', 'verify-storage.mjs', 'verify-incremental.mjs', 'verify-a11y.mjs', 'verify-scroll.mjs']
+const SCRIPTS = ['verify-upkey.mjs', 'verify.mjs', 'verify-export.mjs', 'verify-backup.mjs', 'verify-storage.mjs', 'verify-incremental.mjs', 'verify-a11y.mjs', 'verify-scroll.mjs', 'verify-audit.mjs']
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 if (!fs.existsSync(path.join(ROOT, 'dist', 'index.html'))) {

@@ -20,6 +20,8 @@
               :value="drafts[v.name] ?? v.raw"
               @input="$emit('draft', v.name, $event)"
               @change="$emit('commit', v.name)"
+              @focus="$emit('focus', v.name)"
+              @blur="$emit('blur', v.name)"
               @keyup.enter="e => e.target.blur()"
               title="修改后实时重算全部稿纸"
               spellcheck="false"
@@ -40,5 +42,5 @@ defineProps({
   entries: { type: Array, default: () => [] },
   drafts: { type: Object, default: () => ({}) }
 })
-defineEmits(['close', 'draft', 'commit', 'copy'])
+defineEmits(['close', 'draft', 'commit', 'copy', 'focus', 'blur'])
 </script>
