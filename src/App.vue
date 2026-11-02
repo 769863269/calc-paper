@@ -1069,8 +1069,11 @@ function startRoll(line, prevResult) {
   const p = Math.max(0, Math.min(12, decimalPlaces.value))
   const finalText = displayResult(line.result)
   const t0 = performance.now()
-  const step = (now) => {
-    const k = Math.min(1, (now - t0) / ROLL_MS)
+  const step = () => {
+    // 不用 rAF 的回调参数计时：它与 performance.now() 并非同一时间基（polyfill、部分 WebView、
+    // jsdom 都是这样）。一旦参数小于 t0，k 就是负数，插值会冲出荒谬的结果（如「12*3」显示 -12 万），
+    // 而且 k<1 恒成立 → 无限 rAF，终值永远写不进去。这里自己取时间并双侧夹紧。
+    const k = Math.min(1, Math.max(0, (performance.now() - t0) / ROLL_MS))
     const e = 1 - Math.pow(1 - k, 3) // easeOutCubic
     const v = from + (to - from) * e
     el.textContent = k < 1 ? displayResult(v.toFixed(p)) : finalText

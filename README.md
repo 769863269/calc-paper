@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + Vite + math.js** 的纯前端计算稿纸：多行实时演算、变量记忆、备注、本地持久化。无需 Rust、无需桌面打包，打开网页即用。
 
-当前版本 **0.5.4**（与 `package.json` 一致，界面标题处亦显示该版本号）。
+当前版本 **0.5.5**（与 `package.json` 一致，界面标题处亦显示该版本号）。
 
 ## 功能
 
@@ -51,7 +51,7 @@
 cd calc-paper
 npm install
 npm run dev          # 浏览器打开 http://localhost:1420
-npm run test         # 运行单元测试（Vitest）
+npm run test         # 运行单元测试（Vitest，102 例）
 ```
 
 ## 构建为静态站点
@@ -80,6 +80,10 @@ npm run stress       # 大稿纸压力测试（需先 build；默认 200 行，�
 | `verify-audit.mjs` | 33 | 悬停变量浮层、变量面板改值的合并与撤销、复制错误行、导出前结算、坏备份容错、新建/重命名撤销与防重名、图表负值、`Esc` 关菜单、损坏数据的自救提示 |
 
 浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这几套。
+
+每次运行都会新建一个独立的浏览器 profile（`--user-data-dir`，单个二十几 MB），跑完由 `browser.mjs` 在进程退出时统一删除。早先没有回收，跑多了会累计上百个目录把系统盘写满（真发生过：`ENOSPC` 之后连 shell 都写不了临时文件）。
+
+单元测试覆盖计算内核（`core.test.js`）、组件关键路径（`App.test.js`）与汇率降级链（`rate.test.js`，stub `fetch` 断言三源顺序、各种失败形态与 `'N/A'` 这类脏数据的处理）。
 
 ### 压力测试
 

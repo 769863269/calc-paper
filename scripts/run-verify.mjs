@@ -1,4 +1,4 @@
-// 一条命令跑完三套浏览器回归：起预览服务 → 等端口就绪 → 依次跑脚本 → 收尾。
+// 一条命令跑完九套浏览器回归：起预览服务 → 等端口就绪 → 依次跑脚本 → 收尾。
 // 本地用 `npm run verify`，CI 用同一条命令，避免 YAML 里再拼后台进程那套易碎写法。
 import { spawn } from 'node:child_process'
 import path from 'node:path'

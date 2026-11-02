@@ -6,10 +6,16 @@ async function getJson(url, timeout = 6000) {
   return res.json()
 }
 
+// 取 USD→CNY 并校验成有限正数。
+// 上游偶发把汇率给成 'N/A' / null / 空对象，这些值 Number() 之后是 NaN 或 0，
+// 若直接 toFixed(6) 会产出字符串 "NaN"，既显示成「1 美元 = NaN 元」，
+// 又会被填进底部公式框变成一条必然报错的公式。所以在这里就判失败，交给下一个源。
 function pickCny(d) {
-  const cny = d?.rates?.CNY
-  if (!cny) throw new Error('no cny')
-  return cny
+  const raw = d?.rates?.CNY
+  if (raw === null || raw === undefined || raw === '') throw new Error('no cny')
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n <= 0) throw new Error('bad cny')
+  return n
 }
 
 export const RATE_SOURCES = [

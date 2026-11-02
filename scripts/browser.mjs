@@ -39,12 +39,35 @@ export function resolveBrowser() {
   )
 }
 
+// ---------- 临时 profile 回收 ----------
+// 每个验证脚本都要新建一个浏览器 profile，单个二十几 MB。历史上每跑一轮 `npm run verify`
+// 就留九个且从不删除，累计两百多个目录后把系统盘塞到 0 字节（ENOSPC，连 shell 都写不了临时文件）。
+// 这里统一登记，进程退出时同步删除；浏览器还没完全退出导致个别文件删不掉就跳过，
+// 下次用新的唯一目录，互不干扰。
+const createdProfiles = []
+let profilesCleaned = false
+
+export function cleanupProfiles() {
+  if (profilesCleaned) return
+  profilesCleaned = true
+  for (const dir of createdProfiles) {
+    try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 2 }) } catch (_) {}
+  }
+  createdProfiles.length = 0
+}
+
+process.once('exit', cleanupProfiles)
+process.once('SIGINT', () => { cleanupProfiles(); process.exit(130) })
+process.once('SIGTERM', () => { cleanupProfiles(); process.exit(143) })
+
 // 临时 profile 目录：放系统临时目录下，避免脚本里再写死某个用户的绝对路径。
 // prefix 必须有默认值：undefined + 数字会算出 NaN，path.join 直接抛
 // ERR_INVALID_ARG_TYPE（一个很容易踩、报错信息又完全看不出根因的坑）。
 export function tmpProfile(prefix = 'calcpaper-cdp-') {
-  const dir = path.join(os.tmpdir(), prefix + Date.now())
-  fs.mkdirSync(dir, { recursive: true })
+  // 用 mkdtempSync 原子创建唯一目录：原实现按 Date.now() 拼名字，
+  // 同一毫秒里起两个浏览器会共用同一个 profile，表现为「第二个实例起不来」。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  createdProfiles.push(dir)
   return dir
 }
 
