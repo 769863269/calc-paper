@@ -250,3 +250,48 @@ export function parseChartInput(raw) {
   }
   return out
 }
+
+// 底部输入框 ↑ 的三级阶梯（纯函数，便于单测）：
+//   0 → 1  上一个结果：填入原始值（不带千分位，能直接参与运算）
+//   1 → 2  上一个公式：填入原文
+//   2 → 跳  历史行：清空输入框并把焦点移进那一行继续编辑
+// 返回 { stage, text, jumpTo }；jumpTo >= 0 表示要跳进该行，text 为 null。
+// 锚点始终取「最后一条有内容的行」，保证结果与公式来自同一行，不会串行。
+const NON_FINITE = /^(-?Infinity|NaN)$/
+export function nextUpRecall(state, lines) {
+  const list = Array.isArray(lines) ? lines : []
+  const boxText = (state && state.boxText) || ''
+  const stage = (state && state.stage) || 0
+  const filled = (state && state.filled) || ''
+  const trimmed = boxText.trim()
+  // 只有内容仍与上次 ↑ 填入的完全一致，才认为还在阶梯里；否则是用户自己打的字
+  const recalling = stage > 0 && boxText === filled
+  const lastMatch = (q) => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (((list[i] && list[i].expr) || '').trim() === q) return i
+    }
+    return -1
+  }
+  // 用户手打的内容绝不被覆盖：直接按内容去命中历史行，命中不了就落到末行
+  if (trimmed && !recalling) {
+    const hit = lastMatch(trimmed)
+    return { stage: 0, text: null, jumpTo: hit >= 0 ? hit : (list.length ? list.length - 1 : -1) }
+  }
+  let anchor = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (((list[i] && list[i].expr) || '').trim()) { anchor = i; break }
+  }
+  // 一条公式都没有：只剩空行时跳进末行，否则什么都不做
+  if (anchor < 0) return { stage: 0, text: null, jumpTo: list.length ? list.length - 1 : -1 }
+  if (stage <= 0) {
+    const raw = list[anchor].result || ''
+    // 错误行、「表达式不完整」的中间值、以及 Infinity/NaN 都不当作上一个结果，直接给公式：
+    // 这三种填进输入框都没法继续算，给公式更有用
+    if (raw && raw !== '错误' && !list[anchor].partial && !NON_FINITE.test(raw)) {
+      return { stage: 1, text: raw, jumpTo: -1 }
+    }
+    return { stage: 2, text: list[anchor].expr.trim(), jumpTo: -1 }
+  }
+  if (stage === 1) return { stage: 2, text: list[anchor].expr.trim(), jumpTo: -1 }
+  return { stage: 0, text: null, jumpTo: anchor }
+}

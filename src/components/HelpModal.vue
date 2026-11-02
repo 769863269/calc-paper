@@ -68,7 +68,7 @@
               <tr><td><code>回车</code></td><td>跳下一行（最后一行跳到底部输入框）</td></tr>
               <tr><td><code>Tab</code></td><td>算式 ⇄ 备注 切换</td></tr>
               <tr><td><code>↑</code> / <code>↓</code></td><td>上 / 下移动一行</td></tr>
-              <tr><td><code>↑</code>（底部输入框）</td><td>调出最近一条算过的式子；再按 ↑ 进入选择行模式</td></tr>
+              <tr><td><code>↑</code>（底部输入框）</td><td>三级阶梯：上一个计算结果 → 上一个计算公式 → 选行编辑；<code>Esc</code> 退回空框</td></tr>
               <tr><td><code>Ctrl+Z</code></td><td>撤销删除 / 清空（最多 50 步）</td></tr>
               <tr><td><code>Ctrl+Y</code> / <code>Ctrl+Shift+Z</code></td><td>重做（撤销后反悔，恢复被撤销的那一步）</td></tr>
               <tr><td>拖动 <code>⋮⋮</code></td><td>调整算式行的顺序</td></tr>

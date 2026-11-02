@@ -84,7 +84,7 @@
           <div class="guide-examples">
             <div class="guide-example">· 算式：<code>55+888+999</code> → <code>= 1,942</code></div>
             <div class="guide-example">· 变量：<code>tax=0.13</code>，下一行用 <code>1000*tax</code></div>
-            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Ctrl+Y</code> 重做 · <code>Tab</code> 算式⇄备注 · <code>↑</code> 调历史 / 再按选行</div>
+            <div class="guide-example">· 快捷键：<code>Ctrl+Z</code> 撤销 · <code>Ctrl+Y</code> 重做 · <code>Tab</code> 算式⇄备注 · 底部 <code>↑</code> 上一结果 → 上一公式 → 选行</div>
           </div>
           <div class="guide-actions">
             <button class="modal-btn primary" @click="loadExample">载入示例</button>
@@ -191,8 +191,9 @@
             @keydown.enter.prevent="addFromBottom"
             @keydown.ctrl.enter.prevent="addFromBottom"
             @keydown.up.prevent="bottomUp"
+            @keydown.esc="bottomEsc"
             rows="1"
-            placeholder="计算公式（支持粘贴多行，↑ 调历史，再↑ 选行，Ctrl+Enter 执行）"
+            placeholder="计算公式（支持粘贴多行，↑ 上一结果 → 上一公式 → 选行，Ctrl+Enter 执行）"
             spellcheck="false"
           ></textarea>
           <button class="quick-btn" @click="addFromBottom" v-tip="'新增一行（Enter / Ctrl+Enter）'">=</button>
@@ -459,7 +460,7 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from
 import {
   math, uid, newLine, trimZeros, formatResult, displayResult, nowTime,
   analyzeError, suggestFix, safeEval, lineFullText, uniqueSheetName,
-  isVarDefLine, isValidVarName, isAssignExpr, wrapText
+  isVarDefLine, isValidVarName, isAssignExpr, wrapText, nextUpRecall
 } from './core.js'
 // 导出渲染（canvas 排版 / 分页）与汇率数据源各自独立成模块，便于复用与测试
 import { renderPaperCanvas, sliceCanvasPages, PDF_PAGE_H } from './export.js'
@@ -975,6 +976,8 @@ function autosizeAllExpr() {
 // 底部公式框输入：内容高度随动（兜底浏览器）
 function onQuickInput() {
   autosizeExpr(bottomInput.value)
+  // 用户真的改了内容（与上次 ↑ 填入的不一致）就退出阶梯，下次 ↑ 重新从「上一个结果」开始
+  if (quickExpr.value !== upRecall.filled) resetUpRecall()
 }
 
 // 滚动兜底定时器统一登记，组件卸载时全部清理，避免销毁后仍触发滚动
@@ -1235,6 +1238,7 @@ function addFromBottom() {
   }
   rebuildScope() // 新增行若定义变量，全局重算所有稿纸
   quickExpr.value = ''
+  resetUpRecall() // 提交后输入框清空，↑ 阶梯回到起点
   const newIdx = sh.lines.length - 1
   focusedLine.value = newIdx // 高亮刚计算完成的行
   latestLineIdx.value = newIdx // 独立标记最新计算行，不受 blur 影响
@@ -1245,44 +1249,44 @@ function addFromBottom() {
   })
 }
 
-function historyUp() {
-  if (quickExpr.value) return
-  const lines = currentSheet.value.lines
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].expr.trim()) {
-      quickExpr.value = lines[i].expr
-      nextTick(() => autosizeExpr(bottomInput.value)) // 兜底浏览器：召回后高度随内容
-      return
-    }
-  }
+// 底部输入框 ↑ 的三级阶梯状态：stage 走 0→1→2→跳行，filled 记住上一次填入的内容。
+// 只有输入框内容仍与 filled 一致，才认为还在阶梯里；用户一动键就退回 0，下次 ↑ 从「上一个结果」重来。
+const upRecall = reactive({ stage: 0, filled: '' })
+function resetUpRecall() {
+  upRecall.stage = 0
+  upRecall.filled = ''
 }
 
-// 底部公式框 ↑ 键：空框→先召回历史（有历史时）；框内有内容→进入"选择行"模式（聚焦匹配公式的行，并清空底部框，两模式互斥）
+// 底部公式框 ↑：上一个结果 → 上一个公式 → 历史行（跳进那一行继续编辑）。
+// 阶梯判断全在 core.nextUpRecall 里（纯函数、已单测），这里只负责把结果落到界面。
 function bottomUp() {
-  const sh = currentSheet.value
-  const lines = sh.lines
-  if (!quickExpr.value.trim()) {
-    // 空框：有历史先召回填入，下次再按 ↑ 切选择行；没历史但还有行 → 直接进选择行模式
-    const hasHistory = lines.some(l => l.expr.trim())
-    if (hasHistory) {
-      historyUp()
-      return
-    }
-    if (lines.length) {
-      quickExpr.value = '' // 底部框保持待命空态
-      focusExpr(lines.length - 1)
-      return
-    }
+  const lines = currentSheet.value.lines
+  const r = nextUpRecall({ boxText: quickExpr.value, stage: upRecall.stage, filled: upRecall.filled }, lines)
+  if (r.jumpTo >= 0) {
+    quickExpr.value = ''
+    resetUpRecall() // 已离开底部框，回到这里时重新从第一级开始
+    nextTick(() => autosizeExpr(bottomInput.value))
+    focusExpr(r.jumpTo)
     return
   }
-  if (!lines.length) return
-  const q = quickExpr.value.trim()
-  let target = lines.length - 1 // 默认最后一行
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].expr.trim() === q) { target = i; break }
-  }
-  quickExpr.value = '' // 进入选择行模式：清空底部框
-  focusExpr(target)
+  upRecall.stage = r.stage
+  upRecall.filled = r.text
+  quickExpr.value = r.text
+  nextTick(() => {
+    autosizeExpr(bottomInput.value)
+    const el = bottomInput.value
+    // 光标落到末尾：召回的公式/结果通常要在后面接着写运算符
+    if (el) el.setSelectionRange(el.value.length, el.value.length)
+  })
+}
+
+// 输入框里按 Esc：退出 ↑ 阶梯并清空，不触发全局的弹层关闭逻辑
+function bottomEsc(e) {
+  if (upRecall.stage === 0) return
+  e.stopPropagation()
+  quickExpr.value = ''
+  resetUpRecall()
+  nextTick(() => autosizeExpr(bottomInput.value))
 }
 
 // ---------- 行拖拽排序 ----------
@@ -1753,12 +1757,14 @@ function addSheet() {
   const base = `稿纸${sheets.value.length + 1}`
   sheets.value.push({ id: uid(), name: uniqueSheetName(base, sheets.value.map(s => s.name)), lines: [] })
   activeSheetIndex.value = sheets.value.length - 1
+  resetUpRecall() // 新稿纸为空，↑ 阶梯从头开始
 }
 function switchSheet(idx) {
   flushCompute() // 切走前结算，否则挂起的计算会算到已切换的稿纸上
   activeSheetIndex.value = idx
   focusedLine.value = -1
   latestLineIdx.value = -1
+  resetUpRecall() // 换了稿纸，↑ 阶梯里的「上一个」已不成立，回到起点
   closeMenus()
   completion.value = null
   errPopover.value = { ...errPopover.value, show: false }

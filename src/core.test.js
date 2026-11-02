@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
-  parseChartInput, safeEval, newLine, uid, wrapText
+  parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -196,5 +196,96 @@ describe('wrapText 画布折行', () => {
     expect(wrapText('', 100, mono)).toEqual([''])
     expect(wrapText('123', 0, mono)).toEqual(['123'])
     expect(wrapText(null, 100, mono)).toEqual([''])
+  })
+})
+
+describe('nextUpRecall 底部输入框 ↑ 三级阶梯', () => {
+  // 三行数据：两条计算行 + 一条赋值行
+  const lines = () => [
+    { expr: '12*3', result: '36', partial: false },
+    { expr: 'total = 10+5', result: '15', partial: false },
+    { expr: '', result: '', partial: false },
+  ]
+
+  it('第一级填上一个结果（原始值，不带千分位）', () => {
+    const r = nextUpRecall({ boxText: '', stage: 0, filled: '' }, lines())
+    expect(r).toEqual({ stage: 1, text: '15', jumpTo: -1 })
+  })
+
+  it('第二级填上一个公式原文', () => {
+    const r = nextUpRecall({ boxText: '15', stage: 1, filled: '15' }, lines())
+    expect(r).toEqual({ stage: 2, text: 'total = 10+5', jumpTo: -1 })
+  })
+
+  it('第三级跳进历史行（末条有内容的行号，跳过末尾空行）', () => {
+    const r = nextUpRecall({ boxText: 'total = 10+5', stage: 2, filled: 'total = 10+5' }, lines())
+    expect(r).toEqual({ stage: 0, text: null, jumpTo: 1 })
+  })
+
+  it('锚点取最后一条有内容的行，结果与公式来自同一行', () => {
+    const ls = [
+      { expr: '1+1', result: '2', partial: false },
+      { expr: '5*5', result: '25', partial: false },
+    ]
+    const a = nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)
+    expect(a.text).toBe('25')
+    const b = nextUpRecall({ boxText: '25', stage: 1, filled: '25' }, ls)
+    expect(b.text).toBe('5*5')
+  })
+
+  it('末行是错误行时跳过结果级，直接给公式', () => {
+    const ls = [{ expr: '1+1', result: '2', partial: false }, { expr: '1/0', result: '错误', partial: false }]
+    const r = nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)
+    expect(r).toEqual({ stage: 2, text: '1/0', jumpTo: -1 })
+  })
+
+  it('表达式不完整的半截结果不当作上一个结果', () => {
+    const ls = [{ expr: '12+', result: '12', partial: true }]
+    const r = nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)
+    expect(r).toEqual({ stage: 2, text: '12+', jumpTo: -1 })
+  })
+
+  it('用户手打的内容不被覆盖，直接按内容命中历史行', () => {
+    const ls = [{ expr: '1+1', result: '2', partial: false }, { expr: '2+2', result: '4', partial: false }]
+    const r = nextUpRecall({ boxText: '1+1', stage: 0, filled: '' }, ls)
+    expect(r).toEqual({ stage: 0, text: null, jumpTo: 0 })
+  })
+
+  it('手打内容命中不了时落到末行', () => {
+    const ls = [{ expr: '1+1', result: '2', partial: false }]
+    const r = nextUpRecall({ boxText: '999', stage: 0, filled: '' }, ls)
+    expect(r).toEqual({ stage: 0, text: null, jumpTo: 0 })
+  })
+
+  it('召回后被用户改写（内容与 filled 不一致）则退出阶梯', () => {
+    const ls = [{ expr: '1+1', result: '2', partial: false }]
+    const r = nextUpRecall({ boxText: '2.5', stage: 1, filled: '2' }, ls)
+    expect(r.jumpTo).toBe(0)
+    expect(r.text).toBe(null)
+  })
+
+  it('没有任何公式时：有空行跳末行，没行不动', () => {
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, [{ expr: '' }])).toEqual({ stage: 0, text: null, jumpTo: 0 })
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, [])).toEqual({ stage: 0, text: null, jumpTo: -1 })
+  })
+
+  it('非法入参不抛错', () => {
+    expect(nextUpRecall(null, null)).toEqual({ stage: 0, text: null, jumpTo: -1 })
+    expect(nextUpRecall({}, [])).toEqual({ stage: 0, text: null, jumpTo: -1 })
+  })
+})
+
+describe('nextUpRecall 非可用结果不进入结果级', () => {
+  it('1/0 得到 Infinity 时跳过结果级给公式', () => {
+    const ls = [{ expr: '1/0', result: 'Infinity', partial: false }]
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)).toEqual({ stage: 2, text: '1/0', jumpTo: -1 })
+  })
+  it('-Infinity / NaN 同样跳过', () => {
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, [{ expr: '-1/0', result: '-Infinity' }]).text).toBe('-1/0')
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, [{ expr: '0/0', result: 'NaN' }]).text).toBe('0/0')
+  })
+  it('未定义符号的错误行同样跳过', () => {
+    const ls = [{ expr: 'abc+1', result: '错误', partial: false }]
+    expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)).toEqual({ stage: 2, text: 'abc+1', jumpTo: -1 })
   })
 })
