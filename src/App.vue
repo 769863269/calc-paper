@@ -81,6 +81,16 @@
       <!-- 演算列表 -->
       <div class="paper-wrap">
       <div class="paper-body" :class="'paper-' + paperStyle" ref="paperBody">
+        <!-- 超长稿纸提示：>500 行才出现，纯提示不拦操作 -->
+        <div v-if="showSplitHint" class="split-hint" role="status">
+          <span class="split-hint-text">
+            这张稿纸已有 <b>{{ currentSheet.lines.length }}</b> 行，超过 {{ HUGE_SHEET_ROWS }} 行后首屏与滚动会明显变慢，建议拆成多张稿纸
+          </span>
+          <span class="split-hint-actions">
+            <button class="modal-btn primary split-hint-btn" @click="splitHugeSheet">新建稿纸</button>
+            <button class="modal-btn split-hint-btn" @click="dismissSplitHint">不再提示</button>
+          </span>
+        </div>
         <!-- 空状态引导 -->
         <div v-if="guideOpen && isSheetEmpty" class="guide-card">
           <div class="guide-title">欢迎使用计算稿纸 👋</div>
@@ -488,7 +498,7 @@ import {
   math, uid, newLine, trimZeros, formatResult, displayResult, nowTime,
   analyzeError, suggestFix, safeEval, lineFullText, uniqueSheetName,
   isVarDefLine, isValidVarName, isAssignExpr, wrapText, nextUpRecall,
-  parseDeps, depSignature
+  parseDeps, depSignature, needsSplitHint, HUGE_SHEET_ROWS
 } from './core.js'
 import { dialogDirective } from './a11y.js'
 
@@ -517,6 +527,34 @@ const currentSheet = computed(() => sheets.value[activeSheetIndex.value])
 // 阈值定在 120 行——短稿纸开了收益为零，却要承担屏外行高度估算不准的副作用。
 const DENSE_ROWS = 120
 const isDenseList = computed(() => currentSheet.value.lines.length > DENSE_ROWS)
+
+// ---------- 超长稿纸提示 ----------
+// 压力测试（npm run stress）量出来的事实：≤400 行从容，1000 行单张稿纸首屏 5.3s、
+// 滚动频频掉帧，成本在 DOM 节点数而不是计算。但「卡」的根源是这张纸堆得太长，
+// 不是代码跑不快，所以只提示、不拦截，也不自动拆——用户自己的稿纸怎么组织是他决定的。
+const SPLIT_HINT_KEY = 'calc_paper_split_hint_off'
+function readSplitHintDismissed() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SPLIT_HINT_KEY) || '[]')
+    return new Set(Array.isArray(raw) ? raw.filter(x => typeof x === 'string') : [])
+  } catch (e) { return new Set() } // 存坏了就当没关过，多提示一次不算错
+}
+const splitHintDismissed = ref(readSplitHintDismissed())
+const showSplitHint = computed(() =>
+  needsSplitHint(currentSheet.value.lines.length, splitHintDismissed.value, currentSheet.value.id))
+function dismissSplitHint() {
+  const next = new Set(splitHintDismissed.value)
+  next.add(currentSheet.value.id)
+  // 稿纸 id 随删除/新建不断产生，只留最近 50 条，别让这串 id 无限长
+  while (next.size > 50) next.delete(next.values().next().value)
+  splitHintDismissed.value = next
+  try { localStorage.setItem(SPLIT_HINT_KEY, JSON.stringify([...next])) }
+  catch (e) { console.warn('[calc-paper] 记录提示偏好失败：', e) } // 存不下就只管本次会话，不影响使用
+}
+function splitHugeSheet() {
+  dismissSplitHint() // 用户已经照做拆纸了，别回头再对着旧稿纸提示一遍
+  addSheet()
+}
 // 全局变量作用域：所有稿纸共享同一份变量，面板修改即重算全部稿纸
 const varScope = reactive({})
 // 变量编辑时的本地草稿（避免输入过程中光标跳动）

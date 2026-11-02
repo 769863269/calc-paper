@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
-  parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall, parseDeps, depSignature
+  parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall, parseDeps, depSignature,
+  needsSplitHint, HUGE_SHEET_ROWS
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -343,5 +344,28 @@ describe('depSignature 依赖签名', () => {
     const a = math.bignumber('0.13')
     const b = math.bignumber('0.13')
     expect(depSignature(['x'], { x: a })).toBe(depSignature(['x'], { x: b }))
+  })
+})
+
+describe('needsSplitHint 超长稿纸提示', () => {
+  it('阈值是 500：500 行不提示，501 行提示', () => {
+    expect(HUGE_SHEET_ROWS).toBe(500)
+    expect(needsSplitHint(500, new Set(), 'a')).toBe(false)
+    expect(needsSplitHint(501, new Set(), 'a')).toBe(true)
+  })
+  it('用户点过「不再提示」的稿纸不再出现', () => {
+    expect(needsSplitHint(501, new Set(['a']), 'a')).toBe(false)
+    expect(needsSplitHint(501, new Set(['b']), 'a')).toBe(true)
+  })
+  it('也接受持久化回来的数组形态', () => {
+    expect(needsSplitHint(501, ['a'], 'a')).toBe(false)
+    expect(needsSplitHint(501, [], 'a')).toBe(true)
+  })
+  it('缺参数时按「要提示」处理，不会因为脏数据把提示吞掉', () => {
+    expect(needsSplitHint(501, null, 'a')).toBe(true)
+    expect(needsSplitHint(501, new Set(), null)).toBe(true)
+  })
+  it('空稿纸永远不提示', () => {
+    expect(needsSplitHint(0, new Set(), 'a')).toBe(false)
   })
 })

@@ -182,6 +182,36 @@ try {
   check('长稿纸启用 content-visibility', ROWS > 120 ? dom.dense : true, String(dom.dense))
   check('首屏到可读结果 < 4000ms', bootMs < 4000, bootMs + 'ms')
 
+  // 超长稿纸提示：阈值 500，只在这个量级下才有机会验到真实 DOM（jsdom 只能验逻辑）
+  const hint = await evalS(`
+    const el = document.querySelector('.split-hint');
+    return { exists: !!el, text: (el?.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 90) };
+  `)
+  if (ROWS > 500) {
+    check('>500 行出现「拆纸」提示', hint.exists, hint.text)
+    if (hint.exists) {
+      // 点「不再提示」：提示消失并落盘（下次进页面不再打扰）
+      const dismissed = await evalS(`
+        const btn = document.querySelectorAll('.split-hint .modal-btn')[1];
+        btn.click();
+        return new Promise((res) => {
+          const t0 = performance.now();
+          const tick = () => {
+            if (!document.querySelector('.split-hint')) {
+              return res({ gone: true, saved: JSON.parse(localStorage.getItem('calc_paper_split_hint_off') || '[]') });
+            }
+            if (performance.now() - t0 > 3000) return res({ gone: false, saved: [] });
+            requestAnimationFrame(tick);
+          };
+          tick();
+        });
+      `)
+      check('「不再提示」能关掉并落盘', dismissed.gone && dismissed.saved.length === 1, JSON.stringify(dismissed))
+    }
+  } else {
+    check('≤500 行不出现「拆纸」提示', !hint.exists, String(hint.exists))
+  }
+
   // 长任务观测：输入/滚动/重算只要超过 50ms 就会被记下来，比帧率更能暴露「卡一下」
   await evalS(`
     window.__longTasks = [];

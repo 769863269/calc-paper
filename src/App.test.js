@@ -178,3 +178,74 @@ describe('App 关键路径', () => {
     w.unmount()
   })
 })
+
+// 超长稿纸提示：阈值 500，>500 才出现，点「不再提示」后落盘。
+// 注意 App.vue 的 boot 是模块级求值——只在该模块首次 import 时读一次 localStorage。
+// 所以「先写数据再挂载」必须先 vi.resetModules() 再动态 import，否则拿到的永远是
+// 前面用例留下的空状态（我第一次就是这么写出一个假绿的）。
+describe('超长稿纸提示', () => {
+  const seedState = (n) => ({
+    sheets: [{
+      id: 'big-sheet',
+      name: '稿纸1',
+      lines: Array.from({ length: n }, (_, i) => ({ id: 'l' + i, expr: `${i} + 1` }))
+    }],
+    activeSheetIndex: 0
+  })
+
+  const mountWith = async (n) => {
+    localStorage.setItem('calc_paper_state', JSON.stringify(seedState(n)))
+    vi.resetModules()
+    const mod = await import('./App.vue')
+    const w = mount(mod.default, { attachTo: document.body })
+    await tick(120)
+    return w
+  }
+
+  it('500 行不提示，501 行提示且显示真实行数', async () => {
+    let w = await mountWith(500)
+    expect(w.findAll('.calc-row').length).toBe(500)
+    expect(w.find('.split-hint').exists()).toBe(false)
+    w.unmount()
+
+    localStorage.clear()
+    w = await mountWith(501)
+    expect(w.findAll('.calc-row').length).toBe(501)
+    expect(w.find('.split-hint').exists()).toBe(true)
+    expect(w.find('.split-hint').text()).toContain('501')
+    expect(w.find('.split-hint').text()).toContain('500')
+    w.unmount()
+  }, 40000)
+
+  it('点「不再提示」：提示消失、写入本地、刷新后不再出现', async () => {
+    const w = await mountWith(501)
+    const btns = w.findAll('.split-hint .modal-btn')
+    expect(btns.length).toBe(2)
+    await btns[1].trigger('click') // 第二个是「不再提示」
+    await tick(50)
+    expect(w.find('.split-hint').exists()).toBe(false)
+    expect(JSON.parse(localStorage.getItem('calc_paper_split_hint_off'))).toEqual(['big-sheet'])
+    w.unmount()
+
+    // 同一张稿纸重新加载：提示不应再出现（偏好落盘生效）
+    vi.resetModules()
+    const mod = await import('./App.vue')
+    const w2 = mount(mod.default, { attachTo: document.body })
+    await tick(120)
+    expect(w2.findAll('.calc-row').length).toBe(501)
+    expect(w2.find('.split-hint').exists()).toBe(false)
+    w2.unmount()
+  }, 40000)
+
+  it('点「新建稿纸」：加一张新稿纸并停在提示消失的状态', async () => {
+    const w = await mountWith(501)
+    expect(w.findAll('.sheet-tab').length).toBe(1)
+    await w.findAll('.split-hint .modal-btn')[0].trigger('click')
+    await tick(60)
+    expect(w.findAll('.sheet-tab').length).toBe(2)
+    // 已切到新稿纸，旧稿纸的提示被记下不再打扰
+    expect(w.find('.split-hint').exists()).toBe(false)
+    expect(JSON.parse(localStorage.getItem('calc_paper_split_hint_off'))).toEqual(['big-sheet'])
+    w.unmount()
+  }, 40000)
+})

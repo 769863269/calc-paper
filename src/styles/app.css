@@ -242,6 +242,21 @@ body {
 .empty-hint-title { font-size: 14px; font-weight: 600; color: var(--muted); }
 .empty-hint-sub { font-size: 12px; color: var(--muted); opacity: 0.85; margin: 6px 0 14px; line-height: 1.6; }
 
+/* 超长稿纸提示：>500 行才出现，安静待在列表上方。只提示、不拦截、不自动拆纸 */
+.split-hint {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 16px 10px; padding: 9px 14px;
+  border: 1px solid rgba(255, 159, 10, 0.35);
+  border-radius: var(--radius);
+  background: rgba(255, 159, 10, 0.1);
+  font-size: 13px; line-height: 1.5; color: var(--text);
+}
+.split-hint-text { flex: 1; min-width: 240px; }
+.split-hint-text b { font-weight: 600; }
+.split-hint-actions { display: flex; gap: 8px; }
+/* 提示条里的按钮要比弹层里小一号（弹层 7px/18px 在这里太占地方） */
+.split-hint .modal-btn { padding: 4px 12px; font-size: 12px; }
+
 .calc-row {
   position: relative;
   background: var(--row-bg);

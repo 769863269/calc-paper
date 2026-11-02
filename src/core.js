@@ -341,3 +341,20 @@ export function depSignature(reads, scope) {
   }
   return sig
 }
+
+// 超长稿纸提示：行数超过这个值，首屏与滚动会明显变慢（实测 200 行 0.9s / 400 行 1.85s /
+// 1000 行 5.3s，成本在 DOM 节点数而不是计算），提示用户拆成多张稿纸。
+// 只提示、不拦截——拦下来反而更烦人。
+export const HUGE_SHEET_ROWS = 500
+
+// 是否该给这张稿纸挂提示。单独抽成纯函数只为一件事：边界值（500/501）能被单测钉住，
+// 而不是靠「我觉得 500 差不多」。dismissed 是「用户点过不再提示」的稿纸 id 集合。
+export function needsSplitHint(lineCount, dismissedIds, sheetId) {
+  if (!(lineCount > HUGE_SHEET_ROWS)) return false
+  if (!sheetId) return true
+  if (!dismissedIds) return true
+  const has = typeof dismissedIds.has === 'function'
+    ? dismissedIds.has(sheetId)
+    : Array.isArray(dismissedIds) && dismissedIds.includes(sheetId)
+  return !has
+}
