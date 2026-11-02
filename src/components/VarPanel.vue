@@ -2,7 +2,7 @@
   <!-- 变量面板：只渲染传入的变量列表，改值/复制通过事件回给父组件 -->
     <div v-if="open" class="var-mask" @click="$emit('close')"></div>
     <transition name="slide-right">
-      <aside v-if="open" class="var-panel" @click.stop>
+      <aside v-if="open" class="var-panel" v-dialog="'变量面板'" @click.stop>
         <div class="var-panel-head">
           <div>
             <span class="var-panel-title">变量面板</span>
@@ -32,6 +32,9 @@
 </template>
 
 <script setup>
+import { dialogDirective } from '../a11y.js'
+
+const vDialog = dialogDirective()
 defineProps({
   open: { type: Boolean, default: false },
   entries: { type: Array, default: () => [] },

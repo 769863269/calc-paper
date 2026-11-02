@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
-  parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall
+  parseChartInput, safeEval, newLine, uid, wrapText, nextUpRecall, parseDeps, depSignature
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -287,5 +287,61 @@ describe('nextUpRecall 非可用结果不进入结果级', () => {
   it('未定义符号的错误行同样跳过', () => {
     const ls = [{ expr: 'abc+1', result: '错误', partial: false }]
     expect(nextUpRecall({ boxText: '', stage: 0, filled: '' }, ls)).toEqual({ stage: 2, text: 'abc+1', jumpTo: -1 })
+  })
+})
+
+describe('parseDeps 依赖解析', () => {
+  it('纯算式没有赋值、能列出读到的变量', () => {
+    expect(parseDeps('1650*tax')).toEqual({ reads: ['tax'], assign: null })
+  })
+  it('赋值行给出左侧变量名', () => {
+    expect(parseDeps('tax = 0.13')).toEqual({ reads: [], assign: 'tax' })
+    expect(parseDeps('total = a + b')).toEqual({ reads: ['a', 'b'], assign: 'total' })
+  })
+  it('函数名不算变量（sqrt/min 不进依赖）', () => {
+    expect(parseDeps('sqrt(x) + min(a, b)')).toEqual({ reads: ['a', 'b', 'x'], assign: null })
+  })
+  it('常量作为符号读出（pi / e），保证签名稳定', () => {
+    expect(parseDeps('2*pi')).toEqual({ reads: ['pi'], assign: null })
+  })
+  it('自引用赋值也算依赖（tax = tax + 1）', () => {
+    expect(parseDeps('tax = tax + 1')).toEqual({ reads: ['tax'], assign: 'tax' })
+  })
+  it('比较运算不是赋值', () => {
+    const d = parseDeps('a == b')
+    expect(d.assign).toBe(null)
+    expect(d.reads).toEqual(['a', 'b'])
+  })
+  it('半截表达式不抛错，返回空依赖', () => {
+    // '12+' / '1+(' 在 mathjs 里直接解析失败 → 视为零依赖（同样的错误文本下次可复用）
+    expect(parseDeps('12+')).toEqual({ reads: [], assign: null })
+    expect(parseDeps('1+(')).toEqual({ reads: [], assign: null })
+    expect(parseDeps('')).toEqual({ reads: [], assign: null })
+    expect(parseDeps(null)).toEqual({ reads: [], assign: null })
+  })
+  it('依赖按名字排序，保证签名可比较', () => {
+    expect(parseDeps('z + a + m').reads).toEqual(['a', 'm', 'z'])
+  })
+})
+
+describe('depSignature 依赖签名', () => {
+  it('值没变 → 签名相同', () => {
+    const scope = { a: '1', b: '2' }
+    expect(depSignature(['a', 'b'], scope)).toBe(depSignature(['a', 'b'], scope))
+  })
+  it('任一依赖值变化 → 签名不同', () => {
+    expect(depSignature(['a'], { a: '1' })).not.toBe(depSignature(['a'], { a: '2' }))
+  })
+  it('未定义与非未定义必须可区分', () => {
+    expect(depSignature(['a'], {})).not.toBe(depSignature(['a'], { a: 'undefined' }))
+  })
+  it('空依赖恒定，无依赖的行永远可复用', () => {
+    expect(depSignature([], { a: 1 })).toBe('')
+    expect(depSignature(null, null)).toBe('')
+  })
+  it('BigNumber 用十进制文本参与签名（同值不同实例也算相同）', () => {
+    const a = math.bignumber('0.13')
+    const b = math.bignumber('0.13')
+    expect(depSignature(['x'], { x: a })).toBe(depSignature(['x'], { x: b }))
   })
 })

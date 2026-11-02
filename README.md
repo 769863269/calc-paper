@@ -2,7 +2,7 @@
 
 基于 **Vue 3 + Vite + math.js** 的纯前端计算稿纸：多行实时演算、变量记忆、备注、本地持久化。无需 Rust、无需桌面打包，打开网页即用。
 
-当前版本 **0.4.3**（与 `package.json` 一致，界面标题处亦显示该版本号）。
+当前版本 **0.5.0**（与 `package.json` 一致，界面标题处亦显示该版本号）。
 
 ## 功能
 
@@ -19,6 +19,7 @@
 - **底部 ↑ 三级召回**：空输入框按 `↑` → 填入上一个计算结果（原始值，可直接参与运算）→ 再按填入上一个计算公式 → 再按跳进该行继续编辑；`Esc` 退回空框。结果与公式始终取自同一行（最后一条有内容的行），错误行 / 半截表达式 / `Infinity` / `NaN` 不进入结果级，直接给公式
 - **拖拽排序**：拖 ⋮⋮ 手柄调整行顺序（鼠标 / 触屏同一套 Pointer 实现，移动端可用）
 - **行右键菜单**：右键任意行呼出上移 / 下移、上方 / 下方插入空行、复制（结果·算式·整行）、清空此行、删除此行
+- **备份与恢复**：工具菜单可导出整份数据的 `.json`（含全部稿纸），换设备 / 清缓存后可一键还原；导入前给出两边行数对照并要求确认，恢复本身也能 `Ctrl+Z` 撤销
 - **导出**：Markdown（自动复制 + 下载 `.md`）、**PNG 图片**、**PDF 文档**；长算式与备注按宽度自动折行，PDF 超过一页自动分页并压缩
 - **简易图表**：选中数据一键生成柱状图 / 折线图
 - **稿纸样式**：白纸、横格稿纸、方格稿纸、黄色纸、护眼绿，共 5 种
@@ -36,7 +37,7 @@
 - **空闲时段写盘**：数据保存先做 400ms 防抖，再交给 `requestIdleCallback`（2s 超时兜底），序列化与写 localStorage 不占用输入关键帧；关闭页面前强制落盘，`pulse`/`shake` 这类动画状态不写进存储
 - **输入计算防抖**：连续输入时计算延迟 180ms，补全与输入框高度自适应保持即时，不影响打字手感
 - **长稿纸渲染优化**：超过 120 行时启用 `content-visibility: auto`，浏览器跳过视口外行的渲染与布局
-- **无障碍**：遵循系统「减少动效」偏好（`prefers-reduced-motion`），开启后自动关闭滚动、涟漪等装饰动画
+- **无障碍**：四个弹层统一 `role="dialog"` / `aria-modal`，打开即把焦点移入、`Tab` 在弹层内循环、关闭后焦点归还触发按钮；结果区仅对当前行启用 `aria-live="polite"`，避免整屏朗读；遵循系统「减少动效」偏好（`prefers-reduced-motion`），开启后自动关闭滚动、涟漪等装饰动画
 
 ## 环境要求
 
@@ -61,15 +62,19 @@ npm run verify       # 三套真实浏览器回归（需先 build）
 
 ### 浏览器回归
 
-`npm run verify` 会起 `vite preview`、等端口就绪，再依次跑 `scripts/` 下三套脚本，最后收尾关服务。全部基于 CDP（Chrome DevTools Protocol）+ Node 22 自带的 `WebSocket`，**不依赖 puppeteer / playwright**：
+`npm run verify` 会起 `vite preview`、等端口就绪，再依次跑 `scripts/` 下七套脚本，最后收尾关服务。全部基于 CDP（Chrome DevTools Protocol）+ Node 22 自带的 `WebSocket`，**不依赖 puppeteer / playwright**：
 
 | 脚本 | 项数 | 覆盖 |
 |---|---|---|
 | `verify-upkey.mjs` | 19 | 底部 `↑` 三级阶梯：逐级内容、光标与焦点归属、跳行高亮与重置、`Esc`、手打内容命中历史行、错误行与半截表达式 |
-| `verify.mjs` | 25 | 首屏、计算、四个弹层、拖拽与撤销、跨稿纸变量作用域、删稿纸变量清理、暗色、刷新持久化、CSP 与未捕获错误 |
+| `verify.mjs` | 29 | 首屏、计算、四个弹层、拖拽与撤销、跨稿纸变量作用域、删稿纸变量清理、暗色、刷新持久化、输入法组合态按键、CSP 与未捕获错误 |
 | `verify-export.mjs` | 11 | PNG 落盘与尺寸、长算式折行后画布变高、PDF 分页与文件头 |
+| `verify-backup.mjs` | 16 | 备份 JSON 结构、全稿纸覆盖、改坏数据后恢复、恢复可撤销、坏文件被拒 |
+| `verify-storage.mjs` | 10 | 注入 `QuotaExceededError`：降级删错误日志、未保存标记、配额满时仍能导出备份、恢复后摘标记 |
+| `verify-incremental.mjs` | 16 | 变量级联、同名覆盖顺序、自引用、删定义后下游报错、撤销；并断言「求值次数远小于行数」 |
+| `verify-a11y.mjs` | 14 | 四个弹层的 `role`/`aria-modal`/名称、焦点移入与归还、`Tab` 双向循环、结果区 `aria-live` |
 
-浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这三套。
+浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这几套。
 
 `dist/` 可直接部署到任意静态托管：GitHub Pages、Vercel、Netlify、Nginx、对象存储……
 `vite.config.js` 中 `base` 已设为相对路径 `./`，放到子目录也能正常加载。
@@ -101,15 +106,21 @@ calc-paper/
 │  ├─ manifest.webmanifest     # PWA 清单
 │  └─ icon-192.png / icon-512.png
 ├─ scripts/
-│  ├─ run-verify.mjs        # 一键回归：起预览服务 → 依次跑下面三个脚本 → 收尾
+│  ├─ run-verify.mjs        # 一键回归：起预览服务 → 依次跑下面全部脚本 → 收尾
 │  ├─ browser.mjs           # 浏览器定位与启动参数（Windows/Linux/macOS 通用）
 │  ├─ verify.mjs            # 真实浏览器回归：计算 / 弹层 / 拖拽 / 变量作用域 / 主题 / 持久化
 │  ├─ verify-export.mjs     # 导出回归：PNG 折行、PDF 分页与压缩
-│  └─ verify-upkey.mjs      # 底部 ↑ 三级阶梯回归（真实键盘事件派发）
+│  ├─ verify-upkey.mjs      # 底部 ↑ 三级阶梯回归（真实键盘事件派发）
+│  ├─ verify-backup.mjs     # 备份导出 → 改坏数据 → 恢复的完整闭环
+│  ├─ verify-storage.mjs    # 注入配额写满，验证降级与「未保存」标记
+│  ├─ verify-incremental.mjs# 增量重算：级联正确性 + 跳过率
+│  └─ verify-a11y.mjs       # 弹层 role/焦点/Tab 循环与结果区 aria-live
 └─ src/
    ├─ main.js                # 应用入口、全局错误边界与上报、SW 注册
    ├─ core.js                # 计算核心：mathjs 实例 + 纯函数（与 Vue 解耦）
-   ├─ core.test.js           # core.js 单元测试（含画布折行算法）
+   ├─ core.test.js           # core.js 单元测试（折行、依赖解析、↑ 阶梯）
+   ├─ App.test.js            # 组件级测试（jsdom）：关键交互路径
+   ├─ a11y.js                # v-dialog 指令：role/焦点移入/Tab 循环/焦点归还
    ├─ export.js              # 稿纸导出：canvas 排版、长公式折行、PDF 分页切片
    ├─ rate.js                # 汇率：多源降级抓取与时间格式化
    ├─ styles/app.css         # 全局样式（非 scoped，依赖 CSS 变量主题）

@@ -1,7 +1,7 @@
 <template>
   <!-- 帮助弹层：纯展示内容，无内部状态，开关由父组件控制 -->
   <transition name="fade">
-    <div v-if="open" class="modal-mask" @click.self="$emit('close')">
+    <div v-if="open" class="modal-mask" v-dialog="'帮助与用法'" @click.self="$emit('close')">
       <div class="modal-card help-card">
         <p class="modal-title">帮助与用法</p>
         <div class="help-scroll">
@@ -114,6 +114,8 @@
 </template>
 
 <script setup>
+import { dialogDirective } from '../a11y.js'
+const vDialog = dialogDirective()
 defineProps({ open: { type: Boolean, default: false } })
 defineEmits(['close'])
 </script>

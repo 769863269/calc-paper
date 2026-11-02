@@ -105,7 +105,8 @@ try {
   await clickS('.footer-tools .tool-btn', 8) // 导出按钮
   await sleep(250)
   const menuItems = await evalS(`return [...document.querySelectorAll('.export-menu .exp-item')].map(e => e.textContent.trim())`)
-  check('导出菜单有三项', menuItems.length === 3, JSON.stringify(menuItems))
+  check('导出菜单：3 项成品 + 2 项备份', menuItems.length === 5 && menuItems.slice(0, 3).every(t => !t.includes('备份')),
+    JSON.stringify(menuItems))
 
   const filesBefore = () => fs.readdirSync(dlDir).filter(f => !f.endsWith('.crdownload'))
   await clickS('.export-menu .exp-item', 1) // PNG

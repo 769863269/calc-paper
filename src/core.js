@@ -295,3 +295,49 @@ export function nextUpRecall(state, lines) {
   if (stage === 1) return { stage: 2, text: list[anchor].expr.trim(), jumpTo: -1 }
   return { stage: 0, text: null, jumpTo: anchor }
 }
+
+// ---------- 增量重算的依赖分析 ----------
+// 目的：改一个赋值行不应该让整份稿纸重新求值。要做这件事，先得知道每行「读了哪些变量」。
+// 这里只取自由符号（SymbolNode），函数名（sqrt 之类）不算变量——它在 mathjs 里是 FunctionNode
+// 的 fn 子节点，遍历时跳过即可。解析失败（半截表达式）返回空依赖，
+// 表示「这行不依赖任何变量」，于是同样的错误文本下次可以安全复用。
+export function parseDeps(expr) {
+  const src = String(expr ?? '').trim()
+  if (!src) return { reads: [], assign: null }
+  let node
+  try { node = math.parse(src) } catch (_) { return { reads: [], assign: null } }
+  const reads = new Set()
+  let assign = null
+  try {
+    node.traverse((n, _path, parent) => {
+      if (n.isAssignmentNode) {
+        // tax = … 左侧是 SymbolNode，取名字当被写入的变量
+        if (n.object && n.object.isSymbolNode) assign = n.object.name
+        return
+      }
+      if (!n.isSymbolNode) return
+      // 函数调用的 fn 不是变量（sqrt(x) 里的 sqrt）
+      if (parent && parent.isFunctionNode && parent.fn === n) return
+      // 赋值目标是「写入」而不是「读取」，不能算依赖；
+      // 但 tax = tax + 1 右侧那个 tax 是 BinaryNode 的子节点，仍会被正常计入
+      if (parent && parent.isAssignmentNode && parent.object === n) return
+      reads.add(n.name)
+    })
+  } catch (_) { return { reads: [], assign: null } }
+  // 被赋值的变量如果同时在右侧出现（tax = tax + 1），它也是依赖，不能漏
+  return { reads: [...reads].sort(), assign }
+}
+
+// 依赖签名：只由「读到的变量当前值」决定。值不变 → 结果必然不变 → 可以跳过求值。
+// 用 String() 而不是 JSON：作用域里存的是 mathjs 的 BigNumber 等对象，
+// String 得到的是稳定的十进制文本，正好是我们要的「值是否变了」的判据。
+export function depSignature(reads, scope) {
+  let sig = ''
+  const list = Array.isArray(reads) ? reads : []
+  for (let i = 0; i < list.length; i++) {
+    const name = list[i]
+    const v = scope ? scope[name] : undefined
+    sig += name + '=' + (v === undefined ? '\u0000' : String(v)) + ';'
+  }
+  return sig
+}

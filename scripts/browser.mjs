@@ -39,8 +39,10 @@ export function resolveBrowser() {
   )
 }
 
-// 临时 profile 目录：放系统临时目录下，避免脚本里再写死某个用户的绝对路径
-export function tmpProfile(prefix) {
+// 临时 profile 目录：放系统临时目录下，避免脚本里再写死某个用户的绝对路径。
+// prefix 必须有默认值：undefined + 数字会算出 NaN，path.join 直接抛
+// ERR_INVALID_ARG_TYPE（一个很容易踩、报错信息又完全看不出根因的坑）。
+export function tmpProfile(prefix = 'calcpaper-cdp-') {
   const dir = path.join(os.tmpdir(), prefix + Date.now())
   fs.mkdirSync(dir, { recursive: true })
   return dir

@@ -352,7 +352,56 @@ try {
   `)
   check('刷新后数据持久化', afterReload.rows >= 1, JSON.stringify(afterReload))
 
-  // 11) 无严重错误 / CSP 违规
+  // 11) 输入法组合期间的按键不能被抢走
+  // 中文输入法用 Enter 上屏候选词、↑↓ 翻候选页、Esc 放弃输入。这些键必须原样交还输入法：
+  // 既不能被当成提交（凭空多一行），也不能被 preventDefault 拦掉（候选词上不去）。
+  await evalS(`document.querySelector('.quick-input').focus(); return true;`)
+  await sendS('Input.insertText', { text: '88+11' })
+  await sleep(250)
+  const imeRowsBefore = await evalS(`return document.querySelectorAll('.calc-row').length`)
+  const imeEnter = await evalS(`
+    const box = document.querySelector('.quick-input');
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, isComposing: true, bubbles: true, cancelable: true });
+    box.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented };
+  `)
+  await sleep(500)
+  const imeAfterEnter = await evalS(`
+    return { rows: document.querySelectorAll('.calc-row').length, box: document.querySelector('.quick-input').value };
+  `)
+  check('IME: 组合中的 Enter 不新增行、不清空输入框',
+    imeAfterEnter.rows === imeRowsBefore && imeAfterEnter.box === '88+11',
+    JSON.stringify({ imeRowsBefore, imeAfterEnter }))
+  check('IME: 组合中的 Enter 不调用 preventDefault', imeEnter.prevented === false, JSON.stringify(imeEnter))
+
+  const imeUp = await evalS(`
+    const box = document.querySelector('.quick-input');
+    const ev = new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38, isComposing: true, bubbles: true, cancelable: true });
+    box.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented };
+  `)
+  await sleep(300)
+  const imeAfterUp = await evalS(`return document.querySelector('.quick-input').value`)
+  check('IME: 组合中的 ↑ 不触发召回且不拦默认行为',
+    imeUp.prevented === false && imeAfterUp === '88+11',
+    JSON.stringify({ imeUp, imeAfterUp }))
+
+  // 对照：非组合态 Enter 必须照常提交（守卫不能把正常路径也堵了）
+  const imeEnterPlain = await evalS(`
+    const box = document.querySelector('.quick-input');
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, isComposing: false, bubbles: true, cancelable: true });
+    box.dispatchEvent(ev);
+    return { prevented: ev.defaultPrevented };
+  `)
+  await sleep(600)
+  const plainAfter = await evalS(`
+    return { rows: document.querySelectorAll('.calc-row').length, box: document.querySelector('.quick-input').value };
+  `)
+  check('对照: 正常 Enter 仍能提交（行数 +1、输入框清空）',
+    plainAfter.rows === imeRowsBefore + 1 && plainAfter.box === '' && imeEnterPlain.prevented === true,
+    JSON.stringify({ imeRowsBefore, plainAfter, imeEnterPlain }))
+
+  // 12) 无严重错误 / CSP 违规
   const cspViolations = logs.filter(l => /Content Security Policy|Refused to/i.test(l))
   const errors = logs.filter(l => /^console\.error|^exception|^error:/i.test(l) && !/favicon|Failed to load resource/i.test(l))
   check('无 CSP 违规', cspViolations.length === 0, cspViolations.slice(0, 3).join(' || '))

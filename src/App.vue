@@ -12,6 +12,10 @@
           </div>
           <span class="tab-title">计算稿纸</span>
           <span class="version-tag">v{{ APP_VERSION }} · {{ APP_AUTHOR }}</span>
+          <!-- 写盘失败时常驻显示，点一下直接导出备份（备份不走 localStorage） -->
+          <button v-if="saveFailed" class="save-warn" @click="exportBackup" v-tip="'数据没能保存到本机，点击导出备份'">
+            <span class="save-warn-dot"></span>未保存
+          </button>
         </div>
 
         <div class="header-actions">
@@ -117,8 +121,8 @@
                   v-model="line.expr"
                   @input="onExprInput(lIdx)"
                   @paste="onExprPaste(lIdx, $event)"
-                  @keydown.enter.prevent="onExprEnter(lIdx)"
-                  @keydown.tab.prevent="onExprTab(lIdx)"
+                  @keydown.enter="onExprEnter(lIdx, $event)"
+                  @keydown.tab="onExprTab(lIdx, $event)"
                   @keydown.up="onExprUp(lIdx, $event)"
                   @keydown.down="onExprDown(lIdx, $event)"
                   @focus="onRowFocus(lIdx)"
@@ -142,7 +146,12 @@
                   </div>
                 </div>
               </div>
-              <div class="result-block" :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }">
+              <div
+                class="result-block"
+                :class="{ error: line.result === '错误', partial: line.partial, empty: !line.expr.trim() && !line.result }"
+                :aria-live="focusedLine === lIdx ? 'polite' : 'off'"
+                aria-atomic="true"
+              >
                 <span class="eq-mark">=</span>
                 <span class="result-value" :ref="(el) => setResultRef(el, lIdx)" @dblclick.stop="copyResultDbl(lIdx)">{{ line.result === '错误' ? (line.errorMsg || '错误') : (line.result ? displayResult(line.result) : '') }}</span>
                 <span v-if="line.partial" class="partial-hint" :title="line.errorMsg">表达式不完整</span>
@@ -156,7 +165,7 @@
                 v-model="line.note"
                 class="note-input"
                 placeholder="备注（Tab 可回切算式）"
-                @keydown.tab.prevent="focusExpr(lIdx)"
+                @keydown.tab="onNoteTab(lIdx, $event)"
                 @focus="onRowFocus(lIdx)"
                 @blur="onNoteBlur(lIdx)"
               />
@@ -188,15 +197,15 @@
             @input="onQuickInput"
             @focus="bottomFocused = true"
             @blur="bottomFocused = false"
-            @keydown.enter.prevent="addFromBottom"
-            @keydown.ctrl.enter.prevent="addFromBottom"
-            @keydown.up.prevent="bottomUp"
-            @keydown.esc="bottomEsc"
+            @keydown.enter="addFromBottom($event)"
+            @keydown.ctrl.enter="addFromBottom($event)"
+            @keydown.up="bottomUp($event)"
+            @keydown.esc="bottomEsc($event)"
             rows="1"
             placeholder="计算公式（支持粘贴多行，↑ 上一结果 → 上一公式 → 选行，Ctrl+Enter 执行）"
             spellcheck="false"
           ></textarea>
-          <button class="quick-btn" @click="addFromBottom" v-tip="'新增一行（Enter / Ctrl+Enter）'">=</button>
+          <button class="quick-btn" @click="addFromBottom()" v-tip="'新增一行（Enter / Ctrl+Enter）'">=</button>
         </div>
       </div>
 
@@ -263,7 +272,7 @@
             </button>
 
             <div class="tool-export-wrap">
-              <button class="tool-btn" @click="toggleExportMenu" v-tip="'导出稿纸'">
+              <button class="tool-btn" @click="toggleExportMenu" v-tip="'导出 / 备份'">
                 <svg class="i-18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="7 10 12 15 17 10" />
@@ -283,6 +292,16 @@
                   <button class="exp-item" @click="exportPdf">
                     <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
                     <span>PDF 稿纸</span>
+                  </button>
+                  <!-- 上面三种是「给人看」的成品，下面两项是「给自己留后路」的可回灌备份 -->
+                  <div class="exp-divider"></div>
+                  <button class="exp-item" @click="exportBackup">
+                    <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span>备份（.json）</span>
+                  </button>
+                  <button class="exp-item" @click="pickBackup">
+                    <svg class="i-16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <span>从备份恢复…</span>
                   </button>
                 </div>
               </transition>
@@ -324,6 +343,14 @@
           </div>
         </div>
 
+        <!-- 备份恢复用的隐藏文件选择器：点菜单项时程序化 click() -->
+        <input
+          ref="backupInput"
+          type="file"
+          accept=".json,application/json"
+          class="visually-hidden"
+          @change="onBackupFile"
+        />
         <!-- 导出菜单点击外部关闭遮罩 -->
         <div v-if="exportMenuOpen || styleMenuOpen" class="popover-mask" @click="exportMenuOpen = false; styleMenuOpen = false"></div>
 
@@ -412,7 +439,7 @@
 
     <!-- 自定义确认弹层 -->
     <transition name="fade">
-      <div v-if="confirmState.show" class="modal-mask" @click.self="confirmCancel">
+      <div v-if="confirmState.show" class="modal-mask" v-dialog="'确认操作'" @click.self="confirmCancel">
         <div class="modal-card">
           <p class="modal-msg">{{ confirmState.message }}</p>
           <div class="modal-actions">
@@ -460,8 +487,13 @@ import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from
 import {
   math, uid, newLine, trimZeros, formatResult, displayResult, nowTime,
   analyzeError, suggestFix, safeEval, lineFullText, uniqueSheetName,
-  isVarDefLine, isValidVarName, isAssignExpr, wrapText, nextUpRecall
+  isVarDefLine, isValidVarName, isAssignExpr, wrapText, nextUpRecall,
+  parseDeps, depSignature
 } from './core.js'
+import { dialogDirective } from './a11y.js'
+
+// 弹层无障碍（role / 焦点移入 / Tab 循环 / 关闭后焦点归位），见 src/a11y.js
+const vDialog = dialogDirective()
 // 导出渲染（canvas 排版 / 分页）与汇率数据源各自独立成模块，便于复用与测试
 import { renderPaperCanvas, sliceCanvasPages, PDF_PAGE_H } from './export.js'
 import { fetchRateSources, fmtRateTime } from './rate.js'
@@ -738,7 +770,55 @@ function openErrPopover(lIdx, e) {
 }
 function closeErrPopover() { errPopover.value = { ...errPopover.value, show: false } }
 
+// ---------- 增量重算：依赖签名复用 ----------
+// 全量重算本身不是问题，问题是它会对每一行都跑一次 mathjs 求值。
+// 一行的结果只由三件事决定：算式文本、小数位精度、它读到的那些变量「当时的值」。
+// 三者都没变，结果必然一样——于是可以跳过求值，只保持顺序与作用域写入。
+// 这比「按变量建反向依赖图再拓扑重算」简单得多，也不需要处理同名变量被后面的行覆盖的情况：
+// 循环顺序没变，只是把「算」换成「比对」，语义完全等价。
+const depsCache = new Map()   // 算式文本 → { reads, assign }
+const lineMemo = new WeakMap() // 行对象 → 上次计算时的条件（不进序列化、不进撤销快照）
+// 计数器：让回归脚本能证明「跳过求值」真的发生了，而不是只看结果对不对。
+// 只有自增，开销是几次加法，跟一次 mathjs 求值不在一个量级。
+const computeStats = { calls: 0, bodies: 0, skipped: 0 }
+function depsOf(trimmed) {
+  let d = depsCache.get(trimmed)
+  if (d === undefined) {
+    if (depsCache.size > 500) depsCache.clear() // 反复改字时别让缓存无限膨胀
+    d = parseDeps(trimmed)
+    depsCache.set(trimmed, d)
+  }
+  return d
+}
+
 function computeLine(line, scope, animate = true) {
+  computeStats.calls++
+  const trimmed = line.expr.trim()
+  // 空行：清结果并让缓存失效（否则算式改回原文时会留下空结果）
+  if (!trimmed) { lineMemo.delete(line); computeLineBody(line, scope, animate); return }
+  const deps = depsOf(trimmed)
+  const sig = depSignature(deps.reads, scope)
+  const dp = decimalPlaces.value
+  const memo = lineMemo.get(line)
+  const reusable = !!memo && memo.expr === trimmed && memo.dp === dp && memo.sig === sig
+
+  if (deps.assign && isValidVarName(deps.assign)) {
+    // 赋值行会把值写进作用域，不能像普通行那样「直接跳过」。
+    // 但值没变时可以省掉求值，直接把上次写进去的原始值放回去（重建时作用域已被清空）。
+    if (reusable && memo.raw !== undefined) { computeStats.skipped++; scope[deps.assign] = memo.raw; return }
+    computeLineBody(line, scope, animate)
+    lineMemo.set(line, { expr: trimmed, dp, sig, raw: scope[deps.assign] })
+    return
+  }
+  if (reusable) { computeStats.skipped++; return } // 结果不可能变，连动画都不用跑
+  computeLineBody(line, scope, animate)
+  // sig 记 null 的行（赋值行 / 非法变量名）永不参与复用，避免算式在两种形态间来回改时拿到旧结果
+  lineMemo.set(line, { expr: trimmed, dp, sig: deps.assign ? null : sig, raw: undefined })
+}
+
+// 真正干活的版本：求值、部分表达式、错误分析、动画
+function computeLineBody(line, scope, animate = true) {
+  computeStats.bodies++
   if (line.pulse === undefined) line.pulse = false
   if (line.shake === undefined) line.shake = false
   const prevResult = line.result
@@ -1124,14 +1204,32 @@ function tryCompleteNavigate(idx, dir) {
   return true
 }
 // 回车：有补全先补全，否则跳下一行
-function onExprEnter(idx) {
+// 输入法（中文 / 日文 / 韩文）组合期间的按键属于输入法，不属于应用：
+// Enter 用于上屏候选词，↑↓ 用于翻候选页，Esc 用于放弃这次输入。
+// 这些键一旦被我们 preventDefault，候选词会直接上不去；被我们当成提交，就会凭空多出一行。
+// keyCode 229 是部分浏览器在组合期上报的哨兵值（此时 key 可能是 Unidentified）。
+// 因此所有文本输入框的按键处理都要先过这道闸。
+function isImeKey(e) {
+  return !!e && (e.isComposing === true || e.keyCode === 229)
+}
+function onExprEnter(idx, e) {
+  if (isImeKey(e)) return
+  e.preventDefault()
   if (tryCompleteNavigate(idx, 'enter')) return
   focusNextRow(idx)
 }
 // Tab：有补全先补全，否则跳备注
-function onExprTab(idx) {
+function onExprTab(idx, e) {
+  if (isImeKey(e)) return
+  e.preventDefault()
   if (tryCompleteNavigate(idx, 'tab')) return
   focusNote(idx)
+}
+// 备注框 Tab 回切算式
+function onNoteTab(idx, e) {
+  if (isImeKey(e)) return
+  e.preventDefault()
+  focusExpr(idx)
 }
 // ↑↓：补全下拉时切换候选；行内 textarea 内容多行（软换行也算）时交还默认光标移动，单行时才跳行
 function isExprMultiLine(idx) {
@@ -1139,12 +1237,14 @@ function isExprMultiLine(idx) {
   return !!el && el.scrollHeight > el.clientHeight + 2
 }
 function onExprUp(idx, e) {
+  if (isImeKey(e)) return // 组合期间 ↑ 归输入法翻候选
   if (tryCompleteNavigate(idx, 'up')) { e.preventDefault(); return }
   if (isExprMultiLine(idx)) return // 多行：允许光标上移
   e.preventDefault()
   focusPrevRow(idx)
 }
 function onExprDown(idx, e) {
+  if (isImeKey(e)) return
   if (tryCompleteNavigate(idx, 'down')) { e.preventDefault(); return }
   if (isExprMultiLine(idx)) return // 多行：允许光标下移
   e.preventDefault()
@@ -1224,7 +1324,10 @@ async function delLine(idx) {
   toast(isLast ? '已清空该行' : '已删除该行', { type: 'success', action: { label: '撤销', run: undo } })
 }
 
-function addFromBottom() {
+function addFromBottom(e) {
+  if (isImeKey(e)) return // 组合中的 Enter 是上屏候选词，不是提交
+  // 从「=」按钮进来时没有事件对象，这里允许 e 为空（按钮本身不需要拦默认行为）
+  if (e) e.preventDefault()
   const parts = quickExpr.value.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
   if (!parts.length) { bottomInput.value?.focus({ preventScroll: true }); return }
   pushUndo() // 新增行可撤销（Ctrl+Z 或 toast）
@@ -1259,7 +1362,9 @@ function resetUpRecall() {
 
 // 底部公式框 ↑：上一个结果 → 上一个公式 → 历史行（跳进那一行继续编辑）。
 // 阶梯判断全在 core.nextUpRecall 里（纯函数、已单测），这里只负责把结果落到界面。
-function bottomUp() {
+function bottomUp(e) {
+  if (isImeKey(e)) return // 组合期间 ↑ 归输入法翻候选，且不能拦掉默认行为
+  e.preventDefault()
   const lines = currentSheet.value.lines
   const r = nextUpRecall({ boxText: quickExpr.value, stage: upRecall.stage, filled: upRecall.filled }, lines)
   if (r.jumpTo >= 0) {
@@ -1282,8 +1387,9 @@ function bottomUp() {
 
 // 输入框里按 Esc：退出 ↑ 阶梯并清空，不触发全局的弹层关闭逻辑
 function bottomEsc(e) {
+  if (isImeKey(e)) return // 组合中的 Esc 是取消这次输入，不归应用
   if (upRecall.stage === 0) return
-  e.stopPropagation()
+  if (e) e.stopPropagation()
   quickExpr.value = ''
   resetUpRecall()
   nextTick(() => autosizeExpr(bottomInput.value))
@@ -1677,6 +1783,64 @@ function sheetExportName() {
   return (currentSheet.value.name || '稿纸').replace(/[\\/:*?"<>|]/g, '_')
 }
 
+// ---------- 备份：整份数据的可回灌格式 ----------
+// Markdown / PNG / PDF 都是「给人看」的成品，回不来。这份 JSON 是唯一能把数据搬回来的东西：
+// 换设备、清缓存、隐私模式之后靠它复原，所以导出要包含全部稿纸而不只是当前这张。
+const backupInput = ref(null)
+function backupStamp() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`
+}
+function exportBackup() {
+  exportMenuOpen.value = false
+  flushCompute() // 备份必须存算完的状态，别把挂起的旧结果一起写进去
+  const payload = {
+    app: 'calc-paper',
+    schema: 1,          // 结构版本：以后改数据结构时靠它判断能不能直接灌
+    version: APP_VERSION,
+    exportedAt: new Date().toISOString(),
+    state: serializeState()
+  }
+  downloadBlob(
+    new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+    `计算稿纸-备份-${backupStamp()}.json`
+  )
+  toast('已导出备份', { type: 'success' })
+}
+function pickBackup() {
+  exportMenuOpen.value = false
+  backupInput.value?.click()
+}
+// 读文件 → 归一化 → 二次确认 → 覆盖。任何一步不对就明确报错，
+// 绝不「部分导入」——半份数据比没有更难查。
+async function onBackupFile(e) {
+  const file = e?.target?.files?.[0]
+  if (!file) return
+  if (e?.target) e.target.value = '' // 清空，允许再次选同一个文件
+  if (file.size > 8 * 1024 * 1024) { toast('备份文件过大（超过 8MB）', { type: 'error' }); return }
+  let parsed
+  try {
+    parsed = JSON.parse(await file.text())
+  } catch (_) {
+    toast('这不是合法的 JSON 文件', { type: 'error' })
+    return
+  }
+  // 兼容两种来源：本应用导出的 { state: … }，以及直接拿 calc_paper_state 的裸数据
+  const norm = normalizeState(parsed && parsed.state ? parsed.state : parsed)
+  if (!norm) { toast('备份里没有可用的稿纸数据', { type: 'error' }); return }
+  const inRows = norm.sheets.reduce((n, s) => n + s.lines.length, 0)
+  const curRows = sheets.value.reduce((n, s) => n + s.lines.length, 0)
+  const ok = await askConfirm(
+    `用备份覆盖当前数据？\n\n备份：${norm.sheets.length} 张稿纸 / ${inRows} 行\n当前：${sheets.value.length} 张稿纸 / ${curRows} 行\n\n覆盖后可用 Ctrl+Z 撤销一次。`
+  )
+  if (!ok) return
+  pushUndo()
+  applyNormalizedState(norm)
+  flushSave() // 立刻落盘，别让用户以为恢复了却还在防抖队列里
+  toast(`已恢复 ${norm.sheets.length} 张稿纸 / ${inRows} 行`, { type: 'success', duration: 2400 })
+}
+
 // 导出 Markdown
 function exportMarkdown() {
   exportMenuOpen.value = false
@@ -1924,6 +2088,7 @@ function onGlobalKeydown(e) {
     if (varPanelOpen.value) { varPanelOpen.value = false; return }
     if (helpOpen.value) { helpOpen.value = false; return }
     if (rateCard.value) { closeRateCard(); return }
+    if (chartOpen.value) { chartOpen.value = false; return } // 与其它弹层保持一致
   }
   // 撤销 / 重做：Ctrl+Z、Ctrl+Shift+Z、Ctrl+Y（macOS 上 Cmd 同样生效）
   // 焦点在输入框内时不拦截，交给浏览器原生的文本撤销，避免抢走输入体验
@@ -1945,14 +2110,28 @@ function onDocClick(e) {
 }
 
 // ---------- 持久化 ----------
-// 存储失败告警标志：只提示一次，避免每次输入都弹错误打断用户
+// ---------- 存储失败：降级 + 常驻「未保存」标记 ----------
+// localStorage 写失败最麻烦的地方不是报错，而是「用户看不见」：界面一切照旧，
+// 实际从某一刻起所有改动都没落盘。所以这里分三层处理：
+//   1) 先自己腾地方——错误日志是最不重要的诊断数据，删掉重试一次；
+//   2) 仍然失败就挂常驻标记（标题栏红字），直到下一次保存成功才摘掉；
+//   3) 提示里直接给出能用的补救动作：导出备份不经过 localStorage，配额满了照样能用。
+const ERROR_LOG_STORE_KEY = 'calc_paper_error_log'
+const saveFailed = ref(false)
 let storageWarned = false
 function warnStorage(msg) {
   console.warn('[calc-paper] ' + msg)
   if (!storageWarned) {
     storageWarned = true
-    toast('数据无法保存到本机，请检查浏览器存储设置', { type: 'error', duration: 3200 })
+    toast('数据没能存到本机，建议先导出备份', {
+      type: 'error',
+      duration: 6000,
+      action: { label: '导出备份', run: exportBackup }
+    })
   }
+}
+function writeStateOnce() {
+  localStorage.setItem('calc_paper_state', JSON.stringify(serializeState()))
 }
 // 只落盘数据字段：pulse / shake 是动画用的视图状态（每行都会临时置 true 再复位），
 // 写进 localStorage 纯属冗余，还会让同一份数据在不同时刻产生不同的快照字符串。
@@ -1979,8 +2158,35 @@ function serializeState() {
   }
 }
 function saveState() {
-  try { localStorage.setItem('calc_paper_state', JSON.stringify(serializeState())) }
-  catch (e) { warnStorage('保存失败：' + e) }
+  try {
+    writeStateOnce()
+    if (saveFailed.value) {
+      // 上一次失败、这次成功：把标记摘掉，并让下次失败还能再提示一次
+      saveFailed.value = false
+      storageWarned = false
+      toast('已恢复自动保存', { type: 'success' })
+    }
+    return
+  } catch (e) {
+    // 降级一：删掉错误日志再试。它只是诊断数据，几十 KB 往往正好是压垮配额的那一点
+    let freed = false
+    try {
+      if (localStorage.getItem(ERROR_LOG_STORE_KEY) !== null) {
+        localStorage.removeItem(ERROR_LOG_STORE_KEY)
+        freed = true
+      }
+    } catch (_) { /* 连删除都不让，直接进失败分支 */ }
+    if (freed) {
+      try {
+        writeStateOnce()
+        if (saveFailed.value) { saveFailed.value = false; storageWarned = false }
+        return
+      } catch (_) { /* 腾完还是不够，继续往下报 */ }
+    }
+    // 降级二：标记未保存 + 引导导出备份（备份走下载，不经 localStorage，配额满了也能用）
+    saveFailed.value = true
+    warnStorage('保存失败：' + e)
+  }
 }
 function loadState() {
   try {
@@ -2017,37 +2223,67 @@ watch([activeSheetIndex, theme, paperStyle], scheduleSave)
 watch(decimalPlaces, () => { rebuildScope(); scheduleSave() })
 
 // ---------- 启动 ----------
+// 把「来路不明的状态」归一化成内部结构：缺字段补默认，类型不对就丢弃。
+// 首次加载与「从备份恢复」共用这一个函数——两条路径各写一套的话，
+// 迟早会出现「从备份恢复少补了某个字段」这种只在特定场景暴露的脏状态。
+const PAPER_STYLE_KEYS = ['white', 'ruled', 'grid', 'yellow', 'green']
+function normalizeState(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  if (!Array.isArray(raw.sheets) || !raw.sheets.length) return null
+  const sheetsOut = raw.sheets.map(sh => {
+    const src = sh && typeof sh === 'object' ? sh : {}
+    return {
+      id: src.id || uid(),
+      name: src.name || '稿纸',
+      lines: (Array.isArray(src.lines) ? src.lines : []).map(l => {
+        const line = l && typeof l === 'object' ? l : {}
+        return {
+          id: line.id || uid(),
+          expr: line.expr || '',
+          result: line.result || '',
+          note: line.note || '',
+          time: line.time || (line.result ? nowTime() : ''),
+          errorMsg: line.errorMsg || '',
+          partial: !!line.partial,
+          wasAssign: !!line.wasAssign,
+          pulse: false,
+          shake: false
+        }
+      })
+    }
+  })
+  const rawIdx = typeof raw.activeSheetIndex === 'number' && Number.isFinite(raw.activeSheetIndex)
+    ? Math.floor(raw.activeSheetIndex) : 0
+  return {
+    sheets: sheetsOut,
+    activeSheetIndex: Math.min(Math.max(0, rawIdx), sheetsOut.length - 1),
+    theme: raw.theme === 'dark' || raw.theme === 'light' ? raw.theme : null,
+    paperStyle: PAPER_STYLE_KEYS.includes(raw.paperStyle) ? raw.paperStyle : null,
+    decimalPlaces: Number.isInteger(raw.decimalPlaces) && raw.decimalPlaces >= 0 && raw.decimalPlaces <= 12
+      ? raw.decimalPlaces : null
+  }
+}
+// 应用归一化后的状态：加载与恢复共用，保证两边落到完全一致的内部形态
+function applyNormalizedState(norm) {
+  sheets.value = norm.sheets
+  activeSheetIndex.value = norm.activeSheetIndex
+  if (norm.theme) theme.value = norm.theme
+  if (norm.paperStyle) paperStyle.value = norm.paperStyle
+  if (norm.decimalPlaces !== null) decimalPlaces.value = norm.decimalPlaces
+  rebuildScope() // 结果不落盘，必须按当前作用域重算
+}
+
 // 同步加载本地数据：首帧即渲染真实数据（localStorage 读取是同步的）。
 // 若放在 onMounted 异步执行，首帧先渲染默认空行、数据到达后再替换，
 // transition-group 会把已有行当作"新插入"播放进入动画 → 刷新时整批行跳动闪烁。
-const saved = loadState()
-if (saved) {
-  if (Array.isArray(saved.sheets) && saved.sheets.length) {
-    sheets.value = saved.sheets.map(sh => ({
-      id: sh.id || uid(),
-      name: sh.name || '稿纸',
-      lines: (sh.lines || []).map(l => ({
-        id: l.id || uid(),
-        expr: l.expr || '',
-        result: l.result || '',
-        note: l.note || '',
-        time: l.time || (l.result ? nowTime() : ''),
-        errorMsg: l.errorMsg || '',
-        partial: !!l.partial,
-        wasAssign: !!l.wasAssign,
-        pulse: false,
-        shake: false
-      }))
-    }))
-  }
-  if (typeof saved.activeSheetIndex === 'number') activeSheetIndex.value = saved.activeSheetIndex
-  if (saved.theme === 'dark' || saved.theme === 'light') theme.value = saved.theme
-  if (typeof saved.paperStyle === 'string' && ['white', 'ruled', 'grid', 'yellow', 'green'].includes(saved.paperStyle)) paperStyle.value = saved.paperStyle
-  if (typeof saved.decimalPlaces === 'number' && Number.isInteger(saved.decimalPlaces) && saved.decimalPlaces >= 0 && saved.decimalPlaces <= 12) decimalPlaces.value = saved.decimalPlaces
-}
+const boot = normalizeState(loadState())
 // 顶层先重算一遍：首帧渲染的就是最终结果，避免挂载后再算导致行内容微变
-rebuildScope()
+if (boot) applyNormalizedState(boot) // 内含 rebuildScope
+else rebuildScope()                    // 没有本地数据时默认空稿纸也要算一遍
 onMounted(() => {
+  // 暴露计算计数：回归脚本据此断言「增量重算真的跳过了求值」。
+  // 只读引用，不提供任何写操作，页面外部改不到内部状态。
+  window.__calcPaperStats = computeStats
   window.addEventListener('keydown', onGlobalKeydown)
   window.addEventListener('click', onDocClick)
   window.addEventListener('beforeunload', flushSave)

@@ -1,7 +1,7 @@
 <template>
   <!-- 简易图表：数据解析与 SVG 坐标全在组件内算，父组件只传开关、输入串与图表类型 -->
   <transition name="fade">
-    <div v-if="open" class="modal-mask" @click.self="$emit('close')">
+    <div v-if="open" class="modal-mask" v-dialog="'简易图表'" @click.self="$emit('close')">
       <div class="modal-card chart-card">
         <div class="chart-head">
           <span class="chart-title">简易图表</span>
@@ -59,6 +59,9 @@
 <script setup>
 import { computed } from 'vue'
 import { parseChartInput } from '../core.js'
+import { dialogDirective } from '../a11y.js'
+
+const vDialog = dialogDirective()
 
 const props = defineProps({
   open: { type: Boolean, default: false },

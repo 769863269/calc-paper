@@ -1,7 +1,7 @@
 <template>
   <!-- 汇率说明卡片：数据由父组件抓取后传入，这里只负责展示与倒计时文案 -->
   <transition name="fade">
-    <div v-if="card" class="rate-mask" @click.self="$emit('close')">
+    <div v-if="card" class="rate-mask" v-dialog="'参考汇率'" @click.self="$emit('close')">
       <div class="rate-card">
         <div class="rate-progress"></div>
         <div class="rate-header">
@@ -65,6 +65,9 @@
 
 <script setup>
 import { fmtRateTime } from '../rate.js'
+import { dialogDirective } from '../a11y.js'
+
+const vDialog = dialogDirective()
 
 defineProps({
   card: { type: Object, default: null },
