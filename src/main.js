@@ -1,5 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
+// 全局样式（原 App.vue 内联 style 抽出）：放在 App 之后引入，保持既有层叠顺序
+import './styles/app.css'
 
 const app = createApp(App)
 

@@ -202,6 +202,41 @@ export function isValidVarName(name) {
   return !/^(__proto__|constructor|prototype)$/.test(name)
 }
 
+// 把一段文本按最大像素宽度折成多行。
+// measure: (text) => number，由调用方提供字体测量（canvas 的 measureText），
+// 这样本函数不依赖 DOM，可在 Node 里单测。
+// 断行优先级：优先落在运算符 / 空格 / 逗号之后，避免把算式从数字中间劈开。
+const BREAK_CHARS = /[+\-*/^%,\s]/
+export function wrapText(text, maxWidth, measure) {
+  const s = String(text ?? '')
+  if (!s) return ['']
+  if (!(maxWidth > 0) || measure(s) <= maxWidth) return [s]
+  const lines = []
+  let cur = ''
+  for (const ch of s) {
+    const next = cur + ch
+    if (cur && measure(next) > maxWidth) {
+      // 在已积累的片段里找最靠后的可断点（断在运算符之后）
+      let brk = -1
+      for (let i = cur.length - 1; i > 0; i--) {
+        if (BREAK_CHARS.test(cur[i - 1])) { brk = i; break }
+      }
+      // 断点太靠前（会把一大截挤成空行）时直接按当前宽度硬断
+      if (brk > 0 && measure(cur.slice(0, brk)) > maxWidth * 0.5) {
+        lines.push(cur.slice(0, brk))
+        cur = cur.slice(brk) + ch
+      } else {
+        lines.push(cur)
+        cur = ch
+      }
+    } else {
+      cur = next
+    }
+  }
+  if (cur) lines.push(cur)
+  return lines.length ? lines : ['']
+}
+
 // 解析图表输入：支持 "12,30,25" 或 "一月:12, 二月:30"
 export function parseChartInput(raw) {
   const text = (raw || '').trim()

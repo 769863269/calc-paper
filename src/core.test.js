@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   math, trimZeros, displayResult, formatResult, analyzeError, suggestFix,
   lineFullText, uniqueSheetName, isVarDefLine, isAssignExpr, isValidVarName,
-  parseChartInput, safeEval, newLine, uid
+  parseChartInput, safeEval, newLine, uid, wrapText
 } from './core.js'
 
 describe('trimZeros', () => {
@@ -175,5 +175,26 @@ describe('uid / newLine', () => {
     const l = newLine()
     expect(l).toMatchObject({ expr: '', result: '', note: '', errorMsg: '', partial: false, wasAssign: false })
     expect(typeof l.id).toBe('string')
+  })
+})
+
+describe('wrapText 画布折行', () => {
+  // 等宽假设：每字符 10px，maxWidth=100 即每行 10 字符
+  const mono = (s) => [...s].length * 10
+  it('未超宽时原样返回单行', () => {
+    expect(wrapText('1234+5678', 100, mono)).toEqual(['1234+5678'])
+  })
+  it('超宽时按宽度折行', () => {
+    expect(wrapText('1111+2222+3333', 100, mono)).toEqual(['1111+2222+', '3333'])
+  })
+  it('无断点字符时硬断，不丢字符', () => {
+    const out = wrapText('aaaaaaaaaaa', 100, mono)
+    expect(out.join('')).toBe('aaaaaaaaaaa')
+    expect(out.length).toBe(2)
+  })
+  it('空串与空宽度的边界', () => {
+    expect(wrapText('', 100, mono)).toEqual([''])
+    expect(wrapText('123', 0, mono)).toEqual(['123'])
+    expect(wrapText(null, 100, mono)).toEqual([''])
   })
 })
