@@ -2,10 +2,10 @@
 // 与 verify.mjs 同一套 CDP 骨架，额外补了键盘事件派发（Input.dispatchKeyEvent）。
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { resolveBrowser, browserArgs, tmpProfile } from './browser.mjs'
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
-const PORT = 9334
-const URL = process.argv[2] || 'http://localhost:4173/'
+const PORT = 9335
+const URL = process.argv[2] || 'http://127.0.0.1:4173/'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const results = []
 function check(name, ok, detail) {
@@ -13,19 +13,11 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'} | ${name}${detail ? ' | ' + detail : ''}`)
 }
 
-const tmpDir = 'C:/Users/admin/AppData/Local/Temp/calcpaper-up-' + Date.now()
-fs.mkdirSync(tmpDir, { recursive: true })
+const tmpDir = tmpProfile('calcpaper-up-')
 
-const proc = spawn(EDGE, [
-  '--headless=new',
-  `--remote-debugging-port=${PORT}`,
-  `--user-data-dir=${tmpDir}`,
-  '--no-first-run',
-  '--disable-gpu',
-  '--no-proxy-server',
-  '--window-size=1400,900',
-  'about:blank'
-], { stdio: 'ignore' })
+const proc = spawn(resolveBrowser(), browserArgs([
+  `--remote-debugging-port=${PORT}`, `--user-data-dir=${tmpDir}`
+]), { stdio: 'ignore' })
 
 async function waitFor(fn, timeout = 15000, label = 'condition') {
   const t0 = Date.now()

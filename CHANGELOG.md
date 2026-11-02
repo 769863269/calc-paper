@@ -24,6 +24,11 @@
 - 新增 `scripts/verify-upkey.mjs`（19 项，CDP 驱动 + 真实键盘事件派发）：三级阶梯逐级断言、光标位置、焦点归属、跳行后高亮、跳行后阶梯重置、`Esc`、手打命中历史行、错误行与半截表达式、召回后改写退回选行、回车计算回归、无报错与 CSP 违规。
 - `scripts/verify.mjs` 25 项、`scripts/verify-export.mjs` 11 项回归全过。
 
+### 工程（同版本内补充）
+- **浏览器回归接入 CI**：`.github/workflows/ci.yml` 在构建后新增 `npm run verify`，每次 push / PR 都跑三套脚本；回归失败则阻断 Pages 部署（`deploy` 依赖 `build-test`）。
+- **脚本去掉平台硬编码**：原先三个脚本都写死 `C:/Program Files (x86)/.../msedge.exe` 和 `C:/Users/admin/...`，只能在作者本机跑。新增 `scripts/browser.mjs` 统一解析可执行文件（Windows 找 Edge/Chrome，Linux/macOS 找 Chrome/Chromium，可用 `VERIFY_BROWSER` 覆盖）与临时 profile 目录；Linux 下自动补 `--no-sandbox` / `--disable-dev-shm-usage`（CI 容器必需）。
+- **新增 `scripts/run-verify.mjs`**：一条 `npm run verify` 起预览服务（显式 `--host 127.0.0.1`，绕开 localhost 解析到 `::1` 的坑）、轮询就绪、依次跑脚本、收尾关服务；CI 里不再需要拼后台进程那套易碎写法。
+
 ## [0.4.2] - 变量残留修复 · 导出排版 · 结构拆分
 
 ### 修复

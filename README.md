@@ -56,7 +56,20 @@ npm run test         # 运行单元测试（Vitest）
 ```bash
 npm run build        # 产出 dist/（纯静态文件）
 npm run preview      # 本地预览构建产物
+npm run verify       # 三套真实浏览器回归（需先 build）
 ```
+
+### 浏览器回归
+
+`npm run verify` 会起 `vite preview`、等端口就绪，再依次跑 `scripts/` 下三套脚本，最后收尾关服务。全部基于 CDP（Chrome DevTools Protocol）+ Node 22 自带的 `WebSocket`，**不依赖 puppeteer / playwright**：
+
+| 脚本 | 项数 | 覆盖 |
+|---|---|---|
+| `verify-upkey.mjs` | 19 | 底部 `↑` 三级阶梯：逐级内容、光标与焦点归属、跳行高亮与重置、`Esc`、手打内容命中历史行、错误行与半截表达式 |
+| `verify.mjs` | 25 | 首屏、计算、四个弹层、拖拽与撤销、跨稿纸变量作用域、删稿纸变量清理、暗色、刷新持久化、CSP 与未捕获错误 |
+| `verify-export.mjs` | 11 | PNG 落盘与尺寸、长算式折行后画布变高、PDF 分页与文件头 |
+
+浏览器由 `scripts/browser.mjs` 自动定位（Windows 优先 Edge，Linux/macOS 找 Chrome/Chromium）；要指定别的可执行文件，设 `VERIFY_BROWSER=/path/to/chrome`。CI 在每次 push / PR 时都会跑这三套。
 
 `dist/` 可直接部署到任意静态托管：GitHub Pages、Vercel、Netlify、Nginx、对象存储……
 `vite.config.js` 中 `base` 已设为相对路径 `./`，放到子目录也能正常加载。
@@ -88,6 +101,8 @@ calc-paper/
 │  ├─ manifest.webmanifest     # PWA 清单
 │  └─ icon-192.png / icon-512.png
 ├─ scripts/
+│  ├─ run-verify.mjs        # 一键回归：起预览服务 → 依次跑下面三个脚本 → 收尾
+│  ├─ browser.mjs           # 浏览器定位与启动参数（Windows/Linux/macOS 通用）
 │  ├─ verify.mjs            # 真实浏览器回归：计算 / 弹层 / 拖拽 / 变量作用域 / 主题 / 持久化
 │  ├─ verify-export.mjs     # 导出回归：PNG 折行、PDF 分页与压缩
 │  └─ verify-upkey.mjs      # 底部 ↑ 三级阶梯回归（真实键盘事件派发）

@@ -15,6 +15,7 @@ permissions:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,6 +29,14 @@ jobs:
       - name: 清理并生产构建
         # 本地因 safe-delete 拦截不能用 emptyOutDir，CI 侧直接 rm 保证产物干净（无旧 chunk 残留）
         run: rm -rf dist && npm run build
+      - name: 确认浏览器可定位
+        # 先解析一次，路径不对时这一步就报清楚的错，不用等回归跑到一半才发现
+        run: node -e "import('./scripts/browser.mjs').then(m => console.log('browser:', m.resolveBrowser()))"
+      - name: 浏览器回归（CDP 驱动 headless Chrome）
+        # 三套脚本：底部 ↑ 三级阶梯 / 整体交互 / 导出折行与分页。
+        # ubuntu-latest 自带 google-chrome，脚本通过 scripts/browser.mjs 自动定位；
+        # 预览服务由 run-verify.mjs 起停，构建产物必须已存在（上一步刚 build 完）。
+        run: npm run verify
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:

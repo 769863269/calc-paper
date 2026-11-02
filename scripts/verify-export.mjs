@@ -3,16 +3,15 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { resolveBrowser, browserArgs, tmpProfile } from './browser.mjs'
 
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const PORT = 9334
-const URL = 'http://localhost:4173/'
+const URL = process.argv[2] || 'http://127.0.0.1:4173/'
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const results = []
 const check = (n, ok, d) => { results.push({ n, ok, d }); console.log(`${ok ? 'PASS' : 'FAIL'} | ${n}${d ? ' | ' + d : ''}`) }
 
-const stamp = Date.now()
-const profile = 'C:/Users/admin/AppData/Local/Temp/calcpaper-dl-' + stamp
+const profile = tmpProfile('calcpaper-dl-')
 const dlDir = path.join(profile, 'downloads')
 fs.mkdirSync(dlDir, { recursive: true })
 
@@ -21,10 +20,9 @@ function pngSize(file) {
   return { w: b.readUInt32BE(16), h: b.readUInt32BE(20) }
 }
 
-const proc = spawn(EDGE, [
-  '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
-  '--no-first-run', '--disable-gpu', '--no-proxy-server', '--window-size=1400,900', 'about:blank'
-], { stdio: 'ignore' })
+const proc = spawn(resolveBrowser(), browserArgs([
+  `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`
+]), { stdio: 'ignore' })
 
 let ws, idSeq = 0
 const pending = new Map()
