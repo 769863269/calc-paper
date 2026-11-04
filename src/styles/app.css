@@ -19,7 +19,9 @@
   --input-bg: #f5f5f7;
   --tool-bg: rgba(0, 0, 0, 0.04);
   --footer-bg: rgba(250, 250, 252, 0.8);
-  --focus-bg: rgba(0, 113, 227, 0.06);
+  /* 必须是实色：这个变量直接顶替 --row-bg 作为整行背景，用 rgba 会让稿纸网格
+     从行里透出来，选中行看着像半透明。等价值 = #ffffff 上叠 6% #0071e3。 */
+  --focus-bg: #f0f6fd;
   --focus-ring: rgba(0, 113, 227, 0.12);
   --radius: 10px;
   --radius-sm: 6px;
@@ -43,7 +45,8 @@
   --input-bg: #2a2e36;
   --tool-bg: rgba(255, 255, 255, 0.06);
   --footer-bg: rgba(30, 33, 40, 0.85);
-  --focus-bg: rgba(10, 132, 255, 0.14);
+  /* 同上，实色：#1e2128 上叠 14% #0a84ff */
+  --focus-bg: #1b2f46;
   --focus-ring: rgba(10, 132, 255, 0.22);
   --rule: rgba(255, 255, 255, 0.06);
 }
