@@ -2626,7 +2626,10 @@ function showVarTip(lIdx, rect) {
   const list = []
   for (const name of tokens) {
     if (FUNC_NAMES.includes(name) || name === 'pi' || name === 'e') continue
-    if (!(name in vars)) continue
+    // 必须判「自有属性」：varScope 是 reactive({})，用 `name in vars` 会把原型链上的
+    // toString / constructor / valueOf / hasOwnProperty 全当成已定义变量，
+    // 悬停时提示成「toString = function toString() { [native code] }」。
+    if (!Object.prototype.hasOwnProperty.call(vars, name)) continue
     if (seen.has(name)) continue
     seen.add(name)
     list.push({ name, value: displayResult(String(vars[name])) })

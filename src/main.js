@@ -66,6 +66,9 @@ app.mount('#app')
 // URL 携带 ?_v=<buildId>（vite define 注入），使缓存名随版本变化，旧缓存自动失效
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js?v=' + __BUILD_VERSION__).catch(() => {})
+    // 参数名必须是 _v：public/sw.js 用 params.get('_v') 取版本，两边不一致的话
+    // 版本号永远是兜底的 'v1'，缓存名不随构建变化，activate 里的旧缓存清理就永远不触发，
+    // Cache Storage 会随每次发布一直堆积。
+    navigator.serviceWorker.register('./sw.js?_v=' + __BUILD_VERSION__).catch(() => {})
   })
 }
