@@ -1290,6 +1290,10 @@ function ensureRowVisible(idx) {
 }
 function onExprBlur(idx) {
   flushCompute() // 失焦立即结算，别让防抖把结果留在旧值
+  // 失焦必须收起补全下拉。点候选是 @mousedown.prevent，不会先触发 blur，
+  // 所以这里清掉不会抢走「点一下选中候选」；不清的话下拉会一直浮在原行下方，
+  // 既挡住下面一行的备注框，又让这一行后续的回车继续按「插入补全」处理。
+  if (completion.value && completion.value.lIdx === idx) completion.value = null
   setTimeout(() => {
     if (noteRefs[idx] && document.activeElement === noteRefs[idx]) return
     if (focusedLine.value === idx) focusedLine.value = -1
@@ -2292,6 +2296,8 @@ function onGlobalKeydown(e) {
     return
   }
   if (e.key === 'Escape') {
+    // 补全下拉最"靠近"用户，Esc 先收它，再往上层菜单走
+    if (completion.value) { completion.value = null; return }
     if (rowMenu.value.show || copyMenu.value) { closeMenus(); return }
     if (exportMenuOpen.value || styleMenuOpen.value) { exportMenuOpen.value = false; styleMenuOpen.value = false; return }
     if (errPopover.value.show) { closeErrPopover(); return }

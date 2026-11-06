@@ -23,6 +23,14 @@
      从行里透出来，选中行看着像半透明。等价值 = #ffffff 上叠 6% #0071e3。 */
   --focus-bg: #f0f6fd;
   --focus-ring: rgba(0, 113, 227, 0.12);
+  /* 彩色稿纸（黄纸 / 护眼绿）的纸底与卡片底色。必须是变量：暗色主题下
+     整块要翻成深色，否则 #f5f5f7 的字会压在 62% 白的卡片上，等于白底白字。 */
+  --paper-yellow-bg: #fbf3d6;
+  --paper-yellow-row: rgba(255, 255, 255, 0.62);
+  --paper-yellow-row-hover: rgba(255, 255, 255, 0.78);
+  --paper-green-bg: #e3efe3;
+  --paper-green-row: rgba(255, 255, 255, 0.62);
+  --paper-green-row-hover: rgba(255, 255, 255, 0.78);
   --radius: 10px;
   --radius-sm: 6px;
   --rule: rgba(0, 0, 0, 0.05);
@@ -48,6 +56,14 @@
   /* 同上，实色：#1e2128 上叠 14% #0a84ff */
   --focus-bg: #1b2f46;
   --focus-ring: rgba(10, 132, 255, 0.22);
+  /* 彩色稿纸的暗色版：纸底压成深棕 / 深绿，卡片比纸底略亮一点（保留层次），
+     文字仍用 --text 的浅色，对比度回到正常范围。 */
+  --paper-yellow-bg: #221c11;
+  --paper-yellow-row: #2b2417;
+  --paper-yellow-row-hover: #352c1c;
+  --paper-green-bg: #151f17;
+  --paper-green-row: #1d2a20;
+  --paper-green-row-hover: #253427;
   --rule: rgba(255, 255, 255, 0.06);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -203,16 +219,20 @@ body {
     repeating-linear-gradient(to bottom, transparent 0, transparent 31px, var(--rule) 31px, var(--rule) 32px);
   background-position: 0 10px;
 }
-/* 彩色稿纸：黄色纸 / 护眼绿（背景染色，卡片改为半透明白，保留可读与卡片轮廓） */
-.paper-body.paper-yellow { background-color: #fbf3d6; }
-.paper-body.paper-green { background-color: #e3efe3; }
-.paper-body.paper-yellow .calc-row,
-.paper-body.paper-green .calc-row {
-  background: rgba(255, 255, 255, 0.62);
-  border-color: rgba(0, 0, 0, 0.06);
+/* 彩色稿纸：黄色纸 / 护眼绿（纸底染色，卡片用半透明覆盖，保留可读与卡片轮廓）
+   具体色值走变量，暗色主题在 :root/[data-theme] 里各给一套 */
+.paper-body.paper-yellow { background-color: var(--paper-yellow-bg); }
+.paper-body.paper-green { background-color: var(--paper-green-bg); }
+.paper-body.paper-yellow .calc-row {
+  background: var(--paper-yellow-row);
+  border-color: var(--border);
 }
-.paper-body.paper-yellow .calc-row:hover,
-.paper-body.paper-green .calc-row:hover { background: rgba(255, 255, 255, 0.78); }
+.paper-body.paper-green .calc-row {
+  background: var(--paper-green-row);
+  border-color: var(--border);
+}
+.paper-body.paper-yellow .calc-row:hover { background: var(--paper-yellow-row-hover); }
+.paper-body.paper-green .calc-row:hover { background: var(--paper-green-row-hover); }
 .calc-list { padding: 0 16px; position: relative; }
 
 /* 空状态引导 */

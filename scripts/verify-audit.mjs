@@ -515,6 +515,89 @@ try {
   await send('Page.navigate', { url: URL })
   await sleep(800)
 
+  // ============ 12) 补全下拉与暗色彩色纸：两处「不报错但明显不对」的交互 ============
+  await reload()
+
+  // 12.1 补全下拉：失焦要收、Esc 要收
+  const typeSq = async () => evalS(`
+    const ta = document.querySelectorAll('.expr-input')[0];
+    ta.focus();
+    ta.value = 'sq';
+    ta.setSelectionRange(2, 2);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  `)
+  await typeSq()
+  await sleep(250)
+  check('输入 sq 会弹出函数补全', await evalS(`return !!document.querySelector('.completion-list')`))
+
+  await evalS(`
+    const ta = document.querySelectorAll('.expr-input')[1];
+    ta.focus();
+    return true;
+  `)
+  await sleep(350)
+  const strayAfterBlur = await evalS(`return !!document.querySelector('.completion-list')`)
+  check('焦点换到别的行后补全下拉自动收起', !strayAfterBlur,
+    '失焦后仍残留=' + strayAfterBlur + '（残留会挡住下一行备注框，并让回车继续按「插入补全」处理）')
+
+  await typeSq()
+  await sleep(250)
+  await key('Escape', 'Escape', 27)
+  await sleep(300)
+  const strayAfterEsc = await evalS(`return !!document.querySelector('.completion-list')`)
+  check('Esc 能收起补全下拉', !strayAfterEsc, 'Esc 后仍残留=' + strayAfterEsc)
+
+  // 12.2 暗色主题 + 彩色稿纸：文字与卡片底必须还有对比度（曾经是白底白字）
+  const lum = (rgb) => rgb.map((v) => {
+    const s = v / 255
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
+  }).reduce((acc, v, i) => acc + v * [0.2126, 0.7152, 0.0722][i], 0)
+  const parseRgb = (s) => (String(s).match(/[\d.]+/g) || []).map(Number)
+  const blend = (fg, bg) => fg.slice(0, 3).map((c, i) => Math.round(c * fg[3] + bg[i] * (1 - fg[3])))
+  const contrastOf = (fgStr, bgStr) => {
+    const fg = parseRgb(fgStr)
+    const bg = parseRgb(bgStr)
+    let front = fg.length >= 4 ? blend(fg, bg.slice(0, 3)) : fg.slice(0, 3)
+    const l1 = lum(front), l2 = lum(bg.slice(0, 3))
+    const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1]
+    return (hi + 0.05) / (lo + 0.05)
+  }
+
+  await evalS(`document.querySelector('.header-actions .icon-btn').click(); return true;`)
+  await sleep(350)
+  const themeNow = await evalS(`return document.querySelector('.app-wrapper').dataset.theme`)
+  check('主题可以切到暗色', themeNow === 'dark', String(themeNow))
+
+  for (const paper of ['黄色纸', '护眼绿']) {
+    const picked = await evalS(`
+      const wrap = document.querySelectorAll('.tool-export-wrap')[1];
+      if (wrap) wrap.querySelector('.tool-btn').click();
+      return true;
+    `)
+    await sleep(250)
+    await evalS(`
+      const item = Array.from(document.querySelectorAll('.style-menu .exp-item')).find(b => b.textContent.trim() === ${JSON.stringify(paper)});
+      if (item) item.click();
+      return !!item;
+    `)
+    await sleep(400)
+    const c = await evalS(`
+      const row = document.querySelector('.calc-row');
+      const expr = row.querySelector('.expr-input');
+      const body = document.querySelector('.paper-body');
+      return {
+        paper: body.className,
+        paperBg: getComputedStyle(body).backgroundColor,
+        rowBg: getComputedStyle(row).backgroundColor,
+        text: getComputedStyle(expr).color
+      };
+    `)
+    const ratio = contrastOf(c.text, c.rowBg)
+    note(`暗色 + ${paper} 的配色`, `纸底=${c.paperBg} 卡片=${c.rowBg} 文字=${c.text} 对比度=${ratio.toFixed(2)}`)
+    check(`暗色主题下「${paper}」的文字仍可读（对比度 ≥ 4.5）`, ratio >= 4.5, `实测 ${ratio.toFixed(2)}（修复前约 1.0）`)
+  }
+
   console.log('')
   const fails = results.filter(r => !r.info && !r.ok)
   console.log(`===== 审计回归：${results.filter(r => !r.info).length} 项，失败 ${fails.length} 项 =====`)
